@@ -1,0 +1,16 @@
+# Render.com static-site blueprint for Chip to Cosmos
+services:
+  - type: web
+    name: chip-to-cosmos
+    runtime: static
+    buildCommand: npm ci && npm test && npm run build
+    staticPublishPath: dist
+    pullRequestPreviewsEnabled: true
+    headers:
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
