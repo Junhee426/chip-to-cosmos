@@ -1,0 +1,226 @@
+import * as THREE from 'three';
+import type { LevelId } from '../app/navigation';
+import type { AppState, EngMode, Quality, Store } from '../app/state';
+import type { View } from '../graphics/camera';
+import { ExplodeRig } from '../graphics/explode';
+import { applyOpacity, disposeTree } from '../graphics/fade';
+import type { LabelLayer } from '../graphics/labels';
+import type { FlowPath } from '../graphics/particles';
+
+export interface LevelContext {
+  labels: LabelLayer;
+  sunDir: THREE.Vector3;
+  store: Store;
+  quality: Quality;
+  select: (id: string | null) => void;
+}
+
+export interface ComponentDef {
+  id: string;
+  name: string;
+  sub?: string;
+  object: THREE.Object3D;
+  /** label anchor in object-local coordinates */
+  labelLocal?: THREE.Vector3;
+  desc: string;
+  specs?: string[];
+  /** zoom target level */
+  child?: LevelId;
+  /** id of an RF signal-chain block with detailed info */
+  chain?: string;
+  label?: boolean;
+}
+
+/** Where a child level lives inside this level (local coordinates). */
+export interface Anchor {
+  position: THREE.Vector3;
+  /** half-extent (in this level's units) that the child's `radius` maps onto */
+  size: number;
+  quaternion?: THREE.Quaternion;
+  /** component that visually contains the child (cross-faded during zoom) */
+  focus?: string;
+}
+
+const smooth = (a: number, b: number, x: number): number => {
+  const t = THREE.MathUtils.clamp((x - a) / (b - a), 0, 1);
+  return t * t * (3 - 2 * t);
+};
+
+/**
+ * Base class for one scale level. Subclasses build geometry in `build()` and
+ * register components; this class provides mode dimming, exploded view,
+ * cutaway clipping, zoom-focus fading, labels and disposal.
+ */
+export abstract class BaseLevel {
+  abstract readonly id: LevelId;
+  /** half-extent of the level's main object in local units */
+  abstract readonly radius: number;
+  abstract home: View;
+  readonly root = new THREE.Group();
+  readonly components: ComponentDef[] = [];
+  readonly explode = new ExplodeRig();
+  protected flows: Partial<Record<EngMode, FlowPath[]>> = {};
+  protected modeFocus: Partial<Record<EngMode, string[]>> = {};
+  protected cutawayMats: THREE.Material[] = [];
+  protected cutawayLocal: THREE.Plane | null = null;
+  private cutawayWorld = new THREE.Plane();
+  private modeDim = new Map<string, { cur: number; target: number }>();
+  private focusDim = new Map<string, number>();
+  private levelAlpha = 1;
+  private opacityDirty = true;
+  mode: EngMode = 'structure';
+  /** true when this level is the current, interactive level */
+  active = false;
+  time = 0;
+
+  constructor(protected ctx: LevelContext) {
+    this.root.name = 'level';
+  }
+
+  abstract build(): void;
+
+  /** Called each frame while visible. */
+  protected tick(_dt: number, _state: AppState): void {}
+
+  /** React to parameter changes. */
+  onState(_state: AppState, _changed: Set<string>): void {}
+
+  anchorFor(_child: LevelId): Anchor | null {
+    return null;
+  }
+
+  init(): void {
+    this.build();
+    this.root.userData.levelId = this.id;
+    for (const c of this.components) {
+      c.object.userData.componentId = c.id;
+      c.object.userData.dim = 1;
+      this.modeDim.set(c.id, { cur: 1, target: 1 });
+    }
+    this.setMode(this.mode);
+    for (const list of Object.values(this.flows)) list?.forEach((f) => this.root.add(f.group));
+  }
+
+  protected addComponent(def: ComponentDef): ComponentDef {
+    this.components.push(def);
+    return def;
+  }
+
+  protected addFlow(mode: EngMode, flow: FlowPath): FlowPath {
+    (this.flows[mode] ??= []).push(flow);
+    return flow;
+  }
+
+  registerLabels(onClick: (id: string) => void): void {
+    for (const c of this.components) {
+      if (c.label === false) continue;
+      this.ctx.labels.add({ id: c.id, text: c.name, sub: c.sub, object: c.object, local: c.labelLocal, group: this.id, onClick: () => onClick(c.id) });
+    }
+  }
+
+  setMode(mode: EngMode): void {
+    this.mode = mode;
+    const focus = this.modeFocus[mode];
+    for (const c of this.components) {
+      const d = this.modeDim.get(c.id)!;
+      d.target = mode === 'structure' || !focus || focus.includes(c.id) ? 1 : 0.14;
+    }
+    for (const [m, list] of Object.entries(this.flows)) list?.forEach((f) => f.setActive(m === mode));
+    this.ctx.labels.setDimmed(mode === 'structure' || !focus ? null : new Set(focus));
+    this.onModeChanged(mode);
+  }
+
+  protected onModeChanged(_mode: EngMode): void {}
+
+  /** Zoom-in choreography: context fades, focus component cross-fades into the child. */
+  setFocusProgress(focusId: string | undefined, p: number): void {
+    const ctxFade = 1 - 0.85 * smooth(0.05, 0.55, p);
+    const focusFade = 1 - smooth(0.5, 0.85, p);
+    for (const c of this.components) this.focusDim.set(c.id, c.id === focusId ? focusFade : ctxFade);
+    this.opacityDirty = true;
+  }
+
+  clearFocus(): void {
+    this.focusDim.clear();
+    this.opacityDirty = true;
+  }
+
+  setLevelAlpha(a: number): void {
+    if (Math.abs(a - this.levelAlpha) > 1e-4) {
+      this.levelAlpha = a;
+      this.opacityDirty = true;
+    }
+    for (const list of Object.values(this.flows)) list?.forEach((f) => f.setLevelAlpha(a));
+  }
+
+  get alpha(): number {
+    return this.levelAlpha;
+  }
+
+  setExplode(t: number, immediate = false): void {
+    this.explode.set(t, immediate);
+  }
+
+  setCutaway(on: boolean): void {
+    for (const m of this.cutawayMats) {
+      m.clippingPlanes = on && this.cutawayLocal ? [this.cutawayWorld] : null;
+      m.clipShadows = true;
+      m.side = on ? THREE.DoubleSide : m.userData.baseSide ?? THREE.FrontSide;
+      m.needsUpdate = true;
+    }
+  }
+
+  protected registerCutaway(mats: THREE.Material[]): void {
+    for (const m of mats) {
+      m.userData.baseSide = m.side;
+      this.cutawayMats.push(m);
+    }
+  }
+
+  update(dt: number, state: AppState): void {
+    this.time += dt;
+    this.explode.update(dt);
+    for (const c of this.components) {
+      const d = this.modeDim.get(c.id)!;
+      if (Math.abs(d.cur - d.target) > 1e-3) {
+        d.cur += (d.target - d.cur) * Math.min(1, dt * 5);
+        this.opacityDirty = true;
+      }
+      const fd = this.focusDim.get(c.id) ?? 1;
+      c.object.userData.dim = d.cur * fd;
+    }
+    if (this.opacityDirty) {
+      applyOpacity(this.root, this.levelAlpha);
+      this.opacityDirty = false;
+    }
+    if (this.cutawayLocal) {
+      this.root.updateMatrixWorld();
+      this.cutawayWorld.copy(this.cutawayLocal).applyMatrix4(this.root.matrixWorld);
+    }
+    for (const list of Object.values(this.flows)) list?.forEach((f) => f.update(dt));
+    this.tick(dt, state);
+  }
+
+  /** Force a re-application of opacity (after geometry/material changes). */
+  protected markOpacityDirty(): void {
+    this.opacityDirty = true;
+  }
+
+  componentFor(obj: THREE.Object3D | null): ComponentDef | null {
+    let cur = obj;
+    while (cur && cur !== this.root) {
+      const id = cur.userData.componentId as string | undefined;
+      if (id) return this.components.find((c) => c.id === id) ?? null;
+      cur = cur.parent;
+    }
+    return null;
+  }
+
+  dispose(): void {
+    this.ctx.labels.removeGroup(this.id);
+    disposeTree(this.root);
+    this.root.removeFromParent();
+  }
+}
+
+export { smooth };

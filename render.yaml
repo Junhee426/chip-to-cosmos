@@ -1,0 +1,40 @@
+# Render Blueprint — Chip to Cosmos (static site)
+# Render → New → Blueprint → select this repository. Render reads this file
+# from the branch you connect (normally main).
+services:
+  - type: web
+    name: chip-to-cosmos
+    runtime: static
+    branch: main
+    autoDeploy: true
+    # Tests run first: a failing scientific model blocks the deploy.
+    buildCommand: npm ci && npm test && npm run build
+    staticPublishPath: ./dist
+    envVars:
+      - key: NODE_VERSION
+        value: 22.12.0
+    previews:
+      generation: automatic
+    headers:
+      # Hashed build assets: cache forever
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+      # HTML entry: always revalidate so new deploys show up immediately
+      - path: /index.html
+        name: Cache-Control
+        value: no-cache
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
+      - path: /*
+        name: X-Frame-Options
+        value: SAMEORIGIN
+    routes:
+      # Single-page app: unknown paths fall back to the entry page
+      - type: rewrite
+        source: /*
+        destination: /index.html
