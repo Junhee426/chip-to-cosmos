@@ -30,15 +30,34 @@ export class PostFX {
   readonly bloom: UnrealBloomPass;
   private finish: ShaderPass;
   enabled = true;
+  private samples: number;
 
-  constructor(private renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera, w: number, h: number) {
-    this.composer = new EffectComposer(renderer);
+  constructor(private renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera, w: number, h: number, samples = 4) {
+    // MSAA on the HDR target: canvas antialiasing does not apply once the composer renders off-screen
+    this.samples = samples;
+    const rt = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, samples });
+    this.composer = new EffectComposer(renderer, rt);
     this.composer.addPass(new RenderPass(scene, camera));
     this.bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.3, 0.45, 0.92);
     this.composer.addPass(this.bloom);
     this.composer.addPass(new OutputPass());
     this.finish = new ShaderPass(FinishShader);
     this.composer.addPass(this.finish);
+  }
+
+  /** 0 disables MSAA (performance tier). */
+  setSamples(n: number): void {
+    if (n === this.samples) return;
+    this.samples = n;
+    for (const t of [this.composer.renderTarget1, this.composer.renderTarget2]) {
+      t.samples = n;
+      t.dispose();
+    }
+  }
+
+  /** Vignette + grain are decorative. */
+  setFinish(on: boolean): void {
+    this.finish.enabled = on;
   }
 
   setSize(w: number, h: number): void {

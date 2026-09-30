@@ -70,10 +70,15 @@ URL options: `?level=mosfet` opens a level directly, `?nointro` skips the intro.
 | `Esc` / `Backspace` | Zoom out one scale |
 | Breadcrumb, scale ladder, coupling pills | Jump to any level (animated through the tree) |
 | `1`–`5` | STRUCTURE / SIGNAL / POWER / THERMAL / RADIATION |
-| `E` / `C` / `L` | Toggle explode / cutaway / labels |
+| `E` / `C` / `L` / `P` | Toggle explode / cutaway / labels / perf overlay |
+| Touch | tap = select · drag = orbit · pinch = zoom · **Internal view** button = dive · ‹ = back |
 
-Quality presets (**High / Balanced / Performance**) trade pixel ratio, shadows and bloom;
-an adaptive controller lowers the pixel ratio automatically if the frame rate stays low.
+Quality: **Auto** (default) detects the device class (viewport, DPR, cores, memory, pointer —
+no UA sniffing) and then adapts with hysteresis, removing decoration in a fixed order (particles →
+labels → bloom → shadows → DPR → environment → LOD → decorative motion) while keeping all content.
+**High / Balanced / Performance** are manual and never change on their own. `?perf` or **P** shows
+frame pacing, draw calls and memory. On phones (≤ 900 px) the UI becomes a top nav + bottom-sheet
+inspector with ≥ 44 px touch targets. Budgets and policy: [PERFORMANCE.md](PERFORMANCE.md).
 
 ## Architecture
 
@@ -90,13 +95,14 @@ src/
   ui/                  HUD, analysis panels, intro, DOM helpers
 tests/                 Vitest unit tests
 scripts/smoke.mjs      optional headless smoke test (screenshots every level)
+scripts/perf.mjs       performance + mobile harness (tiers, draw calls, memory, DPR-3 phone)
 ```
 
 Rendering, scientific models, scenes and UI are strictly separated: models are pure
 TypeScript and fully unit-tested; scenes consume them; the UI renders the same numbers.
 Only the current level, its parent and children stay resident in GPU memory.
 
-More detail: [PROJECT.md](PROJECT.md) · [THEORY.md](THEORY.md) ·
+More detail: [PROJECT.md](PROJECT.md) · [PERFORMANCE.md](PERFORMANCE.md) · [THEORY.md](THEORY.md) ·
 [VISUAL_STYLE.md](VISUAL_STYLE.md) · [MODEL_LIMITATIONS.md](MODEL_LIMITATIONS.md)
 
 ## Deployment

@@ -53,6 +53,7 @@ export class FlowPath {
   private curve: THREE.Curve<THREE.Vector3>;
   private points: THREE.Points;
   private offsets: Float32Array;
+  private drawn: number;
   private speed: number;
   private tubeMat: THREE.MeshBasicMaterial;
   private active = false;
@@ -64,6 +65,7 @@ export class FlowPath {
     const count = opts.count ?? 40;
     this.speed = opts.speed ?? 0.25;
     this.offsets = new Float32Array(count);
+    this.drawn = count;
     const pos = new Float32Array(count * 3);
     const phase = new Float32Array(count);
     for (let i = 0; i < count; i++) {
@@ -92,6 +94,12 @@ export class FlowPath {
     this.active = on;
   }
 
+  /** Decorative density (0..1]; the guide tube — the path itself — is always kept. */
+  setDensity(f: number): void {
+    this.drawn = Math.max(3, Math.ceil(this.offsets.length * Math.min(1, f)));
+    this.points.geometry.setDrawRange(0, this.drawn);
+  }
+
   setLevelAlpha(a: number): void {
     this.alpha = a;
   }
@@ -107,7 +115,7 @@ export class FlowPath {
     if (!this.group.visible) return;
     syncPointScale(this.points);
     const pos = this.points.geometry.getAttribute('position') as THREE.BufferAttribute;
-    for (let i = 0; i < this.offsets.length; i++) {
+    for (let i = 0; i < this.drawn; i++) {
       this.offsets[i] = (((this.offsets[i] + dt * this.speed * this.rate) % 1) + 1) % 1;
       const p = this.curve.getPointAt(this.offsets[i], _s);
       pos.setXYZ(i, p.x, p.y, p.z);

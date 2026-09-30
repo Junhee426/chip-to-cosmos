@@ -53,6 +53,7 @@ export function instancedGrid(
   });
   mesh.count = cells.length;
   mesh.instanceMatrix.needsUpdate = true;
+  mesh.userData.grid = { nx, nz, cells };
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   return mesh;

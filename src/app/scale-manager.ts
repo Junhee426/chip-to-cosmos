@@ -49,6 +49,8 @@ export class ScaleManager {
   private queue: LevelId | null = null;
   onArrive: (id: LevelId) => void = () => {};
   onLevelBuilt: (lvl: BaseLevel) => void = () => {};
+  /** optimise + apply graphics + pre-compile shaders before the level is ever shown */
+  prepare: (lvl: BaseLevel) => Promise<void> = async () => {};
 
   constructor(private scene: THREE.Scene, private rig: CameraRig, private ctx: LevelContext, private store: Store) {}
 
@@ -65,14 +67,15 @@ export class ScaleManager {
     if (have) return have;
     let p = this.pending.get(id);
     if (!p) {
-      p = LOADERS[id]().then((C) => {
+      p = LOADERS[id]().then(async (C) => {
         const lvl = new C(this.ctx);
         lvl.init();
         lvl.root.visible = false;
         this.scene.add(lvl.root);
+        this.onLevelBuilt(lvl);
+        await this.prepare(lvl);
         this.levels.set(id, lvl);
         this.pending.delete(id);
-        this.onLevelBuilt(lvl);
         return lvl;
       });
       this.pending.set(id, p);
@@ -232,8 +235,14 @@ export class ScaleManager {
         this.levels.delete(id);
       }
     }
-    // pre-warm neighbours in the background
-    for (const id of keep) if (!this.levels.has(id)) void this.ensure(id);
+    // stream neighbours one at a time when the main thread is idle (avoids an arrival hitch)
+    const todo = [...keep].filter((id) => !this.levels.has(id));
+    const next = () => {
+      const id = todo.shift();
+      if (!id || this.current?.id !== lvl.id) return;
+      void this.ensure(id).then(() => idle(next));
+    };
+    idle(next);
   }
 
   update(dt: number): void {
@@ -280,4 +289,10 @@ function isNoFade(o: THREE.Object3D): boolean {
     cur = cur.parent;
   }
   return false;
+}
+
+function idle(fn: () => void): void {
+  const ric = (window as unknown as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number }).requestIdleCallback;
+  if (ric) ric(fn, { timeout: 1500 });
+  else setTimeout(fn, 250);
 }

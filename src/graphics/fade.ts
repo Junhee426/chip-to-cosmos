@@ -65,6 +65,7 @@ export function applyOpacity(root: THREE.Object3D, levelAlpha: number): void {
 export function disposeTree(root: THREE.Object3D): void {
   root.traverse((o) => {
     const mesh = o as THREE.Mesh;
+    if ((o as THREE.InstancedMesh).isInstancedMesh) (o as THREE.InstancedMesh).dispose();
     if (mesh.geometry) mesh.geometry.dispose();
     const mats = mesh.material ? (Array.isArray(mesh.material) ? mesh.material : [mesh.material]) : [];
     for (const m of mats) {

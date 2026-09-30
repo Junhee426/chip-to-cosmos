@@ -6,6 +6,9 @@ import { ExplodeRig } from '../graphics/explode';
 import { applyOpacity, disposeTree } from '../graphics/fade';
 import type { LabelLayer } from '../graphics/labels';
 import type { FlowPath } from '../graphics/particles';
+import type { RadiationShower } from '../graphics/effects';
+import type { GraphicsConfig } from '../app/quality';
+import { applyLod, applyShadowPolicy, mergeStatic } from '../graphics/optimize';
 
 export interface LevelContext {
   labels: LabelLayer;
@@ -62,6 +65,9 @@ export abstract class BaseLevel {
   protected flows: Partial<Record<EngMode, FlowPath[]>> = {};
   protected modeFocus: Partial<Record<EngMode, string[]>> = {};
   protected cutawayMats: THREE.Material[] = [];
+  protected showers: RadiationShower[] = [];
+  /** purely decorative motion (flicker, pulses) — switched off by the degradation ladder */
+  protected decorative = true;
   protected cutawayLocal: THREE.Plane | null = null;
   private cutawayWorld = new THREE.Plane();
   private modeDim = new Map<string, { cur: number; target: number }>();
@@ -106,6 +112,32 @@ export abstract class BaseLevel {
     return def;
   }
 
+  /** One-time GPU-cost reductions after build: merge static siblings, shadow-caster policy. */
+  optimize(): { merged: number } {
+    const protect = new Set<THREE.Object3D>([...this.explode.objects, ...this.components.map((c) => c.object)]);
+    this.root.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.material && !Array.isArray(m.material) && (m.material as THREE.ShaderMaterial).isShaderMaterial) protect.add(o);
+    });
+    const merged = mergeStatic(this.root, protect, new Set(this.cutawayMats));
+    applyShadowPolicy(this.root, this.radius);
+    this.markOpacityDirty();
+    return { merged };
+  }
+
+  /** Apply the current graphics tier. Only decoration and repeated micro-geometry react. */
+  applyGraphics(g: GraphicsConfig): void {
+    for (const list of Object.values(this.flows)) list?.forEach((f) => f.setDensity(g.particles));
+    for (const s of this.showers) s.setDensity(g.particles);
+    applyLod(this.root, g.modelLod);
+    this.decorative = g.cinematicEffects;
+  }
+
+  /** Materials whose programs should be pre-compiled in both states (fade / cutaway). */
+  get cutawayMaterials(): THREE.Material[] {
+    return this.cutawayMats;
+  }
+
   protected addFlow(mode: EngMode, flow: FlowPath): FlowPath {
     (this.flows[mode] ??= []).push(flow);
     return flow;
@@ -114,7 +146,7 @@ export abstract class BaseLevel {
   registerLabels(onClick: (id: string) => void): void {
     for (const c of this.components) {
       if (c.label === false) continue;
-      this.ctx.labels.add({ id: c.id, text: c.name, sub: c.sub, object: c.object, local: c.labelLocal, group: this.id, onClick: () => onClick(c.id) });
+      this.ctx.labels.add({ id: c.id, text: c.name, sub: c.sub, object: c.object, local: c.labelLocal, group: this.id, priority: c.child ? 2 : 1, onClick: () => onClick(c.id) });
     }
   }
 

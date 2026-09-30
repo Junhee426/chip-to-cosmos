@@ -231,6 +231,7 @@ export class SatelliteLevel extends BaseLevel {
 
     this.shower = new RadiationShower([v3(0.55, -0.23, 0), v3(-0.7, 0.3, 0.2), v3(-0.7, -0.25, 0.25)], 4, 16, COLORS.radiation, 0.06);
     r.add(this.shower.group);
+    this.showers.push(this.shower);
   }
 
   anchorFor(child: LevelId): Anchor | null {
@@ -270,8 +271,8 @@ export class SatelliteLevel extends BaseLevel {
     this.earth.group.visible = ea > 0.01;
     this.shower.setLevelAlpha(this.alpha);
     this.shower.update(dt);
-    const sunTrack = 0.25 + Math.sin(this.time * 0.05) * 0.08;
+    const sunTrack = 0.25 + (this.decorative ? Math.sin(this.time * 0.05) * 0.08 : 0);
     for (const w of this.wings) w.rotation.z = sunTrack;
-    (this.plume.material as THREE.MeshBasicMaterial).opacity = (this.mode === 'power' || this.mode === 'structure' ? 0.3 : 0.08) * (0.85 + 0.15 * Math.sin(this.time * 30)) * this.alpha;
+    (this.plume.material as THREE.MeshBasicMaterial).opacity = (this.mode === 'power' || this.mode === 'structure' ? 0.3 : 0.08) * (this.decorative ? 0.85 + 0.15 * Math.sin(this.time * 30) : 0.92) * this.alpha;
   }
 }

@@ -81,6 +81,7 @@ export class PcbLevel extends BaseLevel {
       m4.makeTranslation(x, 0.012, z);
       viaMesh.setMatrixAt(vc++, m4);
     }
+    viaMesh.userData.lodScatter = true;
     r.add(viaMesh);
 
     // ---------- hero RF-SoC (flip-chip BGA with lid) ----------
@@ -163,7 +164,7 @@ export class PcbLevel extends BaseLevel {
       m4.makeRotationY(ang).setPosition(x, 0.035, z);
       caps.setMatrixAt(i, m4);
     }
-    caps.castShadow = true;
+    caps.userData.lodScatter = true;
     r.add(caps);
 
     // backplane connector + crystal
@@ -192,6 +193,7 @@ export class PcbLevel extends BaseLevel {
     this.addFlow('thermal', new FlowPath([v3(2, 0.5, 0), v3(2, 3.5, 0)], { color: '#ff9a6a', count: 10, size: 0.22, speed: 0.4 }));
     this.shower = new RadiationShower([v3(2, 0.4, 0), v3(7.2, 0.2, 3), v3(7.2, 0.2, -3), v3(1, 0.4, 1)], 10, 16, COLORS.radiation, 0.16);
     r.add(this.shower.group);
+    this.showers.push(this.shower);
   }
 
   anchorFor(child: LevelId): Anchor | null {

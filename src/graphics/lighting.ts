@@ -6,6 +6,7 @@ export interface Lighting {
   fill: THREE.HemisphereLight;
   sunDir: THREE.Vector3;
   setShadowQuality(size: number): void;
+  setEnvironmentResolution(size: number): void;
   fitShadow(radius: number): void;
 }
 
@@ -15,17 +16,26 @@ export interface Lighting {
  * something plausible to reflect.
  */
 export function createLighting(scene: THREE.Scene, renderer: THREE.WebGLRenderer): Lighting {
-  const pmrem = new THREE.PMREMGenerator(renderer);
-  const envScene = spaceStudio();
-  const envTex = pmrem.fromScene(envScene, 0.02).texture;
-  scene.environment = envTex;
+  let envTarget: THREE.WebGLRenderTarget | null = null;
+  let envSize = 0;
+  const buildEnv = (size: number) => {
+    if (size === envSize) return;
+    envSize = size;
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    const envScene = spaceStudio();
+    const next = pmrem.fromScene(envScene, 0.02, 0.1, 100, { size });
+    pmrem.dispose();
+    envScene.traverse((o) => {
+      const m = o as THREE.Mesh;
+      m.geometry?.dispose();
+      (m.material as THREE.Material | undefined)?.dispose();
+    });
+    envTarget?.dispose();
+    envTarget = next;
+    scene.environment = next.texture;
+  };
+  buildEnv(256);
   scene.environmentIntensity = 0.8;
-  pmrem.dispose();
-  envScene.traverse((o) => {
-    const m = o as THREE.Mesh;
-    m.geometry?.dispose();
-    (m.material as THREE.Material | undefined)?.dispose();
-  });
 
   // key from upper-left so flat metal faces don't mirror it straight into the default camera views
   const sunDir = new THREE.Vector3(-0.55, 0.72, 0.42).normalize();
@@ -48,6 +58,9 @@ export function createLighting(scene: THREE.Scene, renderer: THREE.WebGLRenderer
     rim,
     fill,
     sunDir,
+    setEnvironmentResolution(size: number) {
+      buildEnv(size);
+    },
     setShadowQuality(size: number) {
       key.castShadow = size > 0;
       if (size > 0 && key.shadow.mapSize.x !== size) {

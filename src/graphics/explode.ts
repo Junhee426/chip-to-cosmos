@@ -31,6 +31,10 @@ export class ExplodeRig {
     }
   }
 
+  get objects(): THREE.Object3D[] {
+    return this.parts.map((p) => p.obj);
+  }
+
   get current(): number {
     return this.value;
   }

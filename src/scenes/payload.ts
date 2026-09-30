@@ -164,6 +164,7 @@ export class PayloadLevel extends BaseLevel {
     }
     this.shower = new RadiationShower(['adc', 'modem', 'beamformer', 'obp'].map((id) => v3(-3.28 + ids.indexOf(id) * PITCH, 0.2, 0.5)), 6, 14, COLORS.radiation, 0.08);
     r.add(this.shower.group);
+    this.showers.push(this.shower);
   }
 
   static cardRotation(): THREE.Quaternion {
