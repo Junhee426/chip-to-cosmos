@@ -11,9 +11,12 @@ import { chromium } from 'playwright-core';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 
-const url = process.argv[2] ?? 'http://localhost:4173';
-const out = process.argv[3] ?? 'perf-out';
+const pos = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+const url = pos[0] ?? 'http://localhost:4173';
+const out = pos[1] ?? 'perf-out';
 const gpu = process.argv.includes('--gpu');
+const onlyArg = process.argv.find((a) => a.startsWith('--only='));
+const only = new Set(onlyArg ? onlyArg.slice(7).split(',') : ['tiers', 'memory', 'mobile']);
 mkdirSync(out, { recursive: true });
 const LEVELS = ['cosmos', 'satellite', 'array', 'payload', 'pcb', 'package', 'die', 'mosfet', 'silicon', 'energy'];
 const args = gpu ? ['--ignore-gpu-blocklist', '--enable-gpu-rasterization'] : ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'];
@@ -49,7 +52,7 @@ async function measure(page, sampleMs) {
 
 // ---- 1. per tier, per level (desktop 1600×900, DPR 1) ----
 const tiers = {};
-for (const tier of ['high', 'balanced', 'performance']) {
+for (const tier of only.has('tiers') ? ['high', 'balanced', 'performance'] : []) {
   const { ctx, page } = await open({ width: 1600, height: 900 }, {}, `&quality=${tier}`);
   env.gl = env.gl ?? (await glInfo(page));
   const rows = [];
@@ -65,9 +68,10 @@ for (const tier of ['high', 'balanced', 'performance']) {
 }
 
 // ---- 2. transition hitch + memory growth over repeated zoom cycles ----
-const { ctx: c2, page: p2 } = await open({ width: 1600, height: 900 }, {}, '&quality=balanced');
 const memory = [];
 const hitch = [];
+if (only.has('memory')) {
+const { ctx: c2, page: p2 } = await open({ width: 1600, height: 900 }, {}, '&quality=balanced');
 for (let k = 0; k < 4; k++) {
   await p2.evaluate(() => window.c2c.mgr.jumpTo('satellite'));
   await p2.waitForTimeout(800);
@@ -83,17 +87,20 @@ console.log('\nmemory after satellite→die→satellite cycles');
 console.table(memory);
 console.table(hitch);
 await c2.close();
+}
 
 // ---- 3. mobile emulation (390×844, DPR 3, touch) ----
+let mobile = null;
+const mob = [];
+if (only.has('mobile')) {
 const { ctx: c3, page: p3 } = await open({ width: 390, height: 844 }, { deviceScaleFactor: 3, isMobile: true, hasTouch: true });
-const mobile = await p3.evaluate(() => {
+mobile = await p3.evaluate(() => {
   const c = window.c2c;
   const big = [...document.querySelectorAll('.hud button, .hud select')].filter((b) => b.offsetParent !== null).map((b) => b.getBoundingClientRect()).filter((r) => r.width > 0);
   const small = big.filter((r) => r.height < 44 || r.width < 44).length;
   return { detected: c.detected, tier: c.quality.tier, mode: c.store.get().quality, renderDpr: c.renderer.getPixelRatio(), deviceDpr: devicePixelRatio, canvasPx: `${c.renderer.domElement.width}×${c.renderer.domElement.height}`, sheetH: Math.round(document.querySelector('.panel').getBoundingClientRect().height), controlsBelow44: small, controlsVisible: big.length };
 });
 await p3.screenshot({ path: `${out}/mobile-collapsed.png` });
-const mob = [];
 for (const l of ['satellite', 'mosfet', 'array']) {
   await p3.evaluate((id) => window.c2c.mgr.jumpTo(id), l);
   await p3.waitForTimeout(1500);
@@ -112,6 +119,7 @@ console.log('\nmobile');
 console.table([mobile]);
 console.table(mob);
 await c3.close();
+}
 await browser.close();
 
 writeFileSync(`${out}/perf.json`, JSON.stringify({ env, tiers, memory, hitch, mobile, mobileLevels: mob, errors }, null, 2));

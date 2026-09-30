@@ -334,7 +334,7 @@ export class Hud {
       <p class="sum-line">${line}</p>
       ${key ? `<div class="sum-key">${key}</div>` : ''}
       <div class="sum-actions">
-        ${child ? `<button class="sum-btn primary" data-act="enter">Internal view · ${LEVELS[child].crumb} ›</button>` : ''}
+        ${child ? `<button class="sum-btn primary" data-act="enter" aria-label="Internal view: ${LEVELS[child].title}">Inside · ${LEVELS[child].crumb} ›</button>` : ''}
         <button class="sum-btn" data-act="experiment">Experiment</button>
       </div>`;
     this.summary.querySelector('[data-act="enter"]')?.addEventListener('click', () => child && this.cb.navigate(child));

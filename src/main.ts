@@ -318,6 +318,8 @@ async function boot(): Promise<void> {
   history.replaceState({ level: first }, '', location.href);
   await mgr.jumpTo(first);
   document.body.classList.add('ready');
+  const splash = document.querySelector('.splash');
+  setTimeout(() => splash?.remove(), 1000); // do not keep a transparent full-screen layer around
   if (!seen && !startLevel && !params.has('nointro')) void intro.play();
 
   // ---- loop ----
