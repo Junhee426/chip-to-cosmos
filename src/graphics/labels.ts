@@ -8,6 +8,8 @@ export interface LabelSpec {
   /** anchor in the object's local space */
   local?: THREE.Vector3;
   group: string;
+  /** higher = kept longer when label density drops (selected always wins) */
+  priority?: number;
   onClick?: () => void;
 }
 
@@ -42,6 +44,10 @@ export class LabelLayer {
   private activeGroup: string | null = null;
   private opacity = 1;
   enabled = true;
+  /** fraction of this level's callouts to show (graphics tier) */
+  density = 1;
+  /** hard cap for small screens (mobile shows few, essential callouts) */
+  maxLabels = Infinity;
   insets: Insets = { left: 90, right: 380, top: 90, bottom: 110 };
 
   constructor(parent: HTMLElement) {
@@ -103,6 +109,10 @@ export class LabelLayer {
       if (it.group !== this.activeGroup || !this.enabled) this.hide(it);
     }
     if (!this.enabled || !active.length) return;
+    // density: keep the selected callout, then navigable/essential ones, then the rest
+    const budget = Math.max(1, Math.min(this.maxLabels, Math.ceil(active.length * this.density)));
+    const ranked = [...active].sort((a, b) => (b.highlighted ? 1e6 : b.priority ?? 1) - (a.highlighted ? 1e6 : a.priority ?? 1));
+    const allowed = new Set(ranked.slice(0, budget));
     const left: LabelItem[] = [];
     const right: LabelItem[] = [];
     const cx = (this.insets.left + (w - this.insets.right)) / 2;
@@ -111,7 +121,7 @@ export class LabelLayer {
       it.object.localToWorld(_v);
       _v.project(camera);
       const onScreen = _v.z < 1 && _v.z > -1 && Math.abs(_v.x) < 1.2 && Math.abs(_v.y) < 1.2;
-      let visible = onScreen && isShown(it.object);
+      let visible = onScreen && allowed.has(it) && isShown(it.object);
       it.sx = (_v.x * 0.5 + 0.5) * w;
       it.sy = (-_v.y * 0.5 + 0.5) * h;
       if (it.sx < this.insets.left - 20 || it.sx > w - this.insets.right + 20) visible = false;

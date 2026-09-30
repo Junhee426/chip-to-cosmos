@@ -1,5 +1,6 @@
 import { LEVELS, MAIN_CHAIN, breadcrumb, depth, formatLength, type LevelId } from '../app/navigation';
 import type { AppState, EngMode, Quality, Store } from '../app/state';
+import { LEVEL_KEY_PARAM } from './summary';
 import { systemInput } from '../app/system';
 import { THEORY } from '../content/theory';
 import type { ModelMeta } from '../models/meta';
@@ -11,6 +12,9 @@ import { fx, h } from './dom';
 
 export interface HudCallbacks {
   navigate: (id: LevelId) => void;
+  back: () => void;
+  /** safe viewport changed (panels, sheet, nav) */
+  layout: () => void;
   replayIntro: () => void;
   componentInfo: (id: string) => ComponentDef | null;
 }
@@ -47,6 +51,17 @@ export class Hud {
   private coupling: HTMLElement;
   private couplingKey = '';
   readonly fps: HTMLElement;
+  readonly perf: HTMLElement;
+  private panel!: HTMLElement;
+  private rail!: HTMLElement;
+  private top!: HTMLElement;
+  private tools!: HTMLElement;
+  private summary!: HTMLElement;
+  private sheetHandle!: HTMLButtonElement;
+  private toastEl!: HTMLElement;
+  private qualityNote!: HTMLElement;
+  sheetExpanded = false;
+  private mobile = false;
 
   constructor(parent: HTMLElement, private store: Store, private cb: HudCallbacks) {
     this.root = h('div', 'hud');
@@ -59,18 +74,34 @@ export class Hud {
     this.crumbs.setAttribute('aria-label', 'Scale breadcrumb');
     const tools = h('div', 'tools');
     this.quality = h('select', 'tool-select');
-    for (const [v, l] of [['high', 'High'], ['balanced', 'Balanced'], ['performance', 'Performance']]) this.quality.append(new Option(`Quality · ${l}`, v));
+    this.quality.setAttribute('aria-label', 'Graphics quality');
+    for (const [v, l] of [['auto', 'Auto'], ['high', 'High'], ['balanced', 'Balanced'], ['performance', 'Performance']]) this.quality.append(new Option(`Quality · ${l}`, v));
     this.quality.addEventListener('change', () => store.set({ quality: this.quality.value as Quality }));
     this.labelsBtn = h('button', 'tool-btn', 'Labels');
     this.labelsBtn.addEventListener('click', () => store.set({ labels: !store.get().labels }));
     const intro = h('button', 'tool-btn', '▶ Intro');
     intro.addEventListener('click', () => cb.replayIntro());
     this.fps = h('span', 'fps');
-    tools.append(this.fps, this.labelsBtn, this.quality, intro);
-    top.append(brand, this.crumbs, tools);
+    this.qualityNote = h('span', 'quality-note');
+    tools.append(this.fps, this.qualityNote, this.labelsBtn, this.quality, intro);
+    const back = h('button', 'icon-btn nav-back', '‹');
+    back.setAttribute('aria-label', 'Zoom out to parent scale');
+    back.addEventListener('click', () => cb.back());
+    const menu = h('button', 'icon-btn nav-menu', '⋯');
+    menu.setAttribute('aria-label', 'Menu: scale, modes, view, quality');
+    menu.setAttribute('aria-expanded', 'false');
+    menu.addEventListener('click', () => {
+      const open = !this.root.classList.contains('menu-open');
+      this.root.classList.toggle('menu-open', open);
+      menu.setAttribute('aria-expanded', String(open));
+    });
+    top.append(back, brand, this.crumbs, tools, menu);
+    this.top = top;
+    this.tools = tools;
 
     // --- left rail ---
     const rail = h('aside', 'rail');
+    this.rail = rail;
     rail.append(h('div', 'rail-title', 'SCALE'));
     this.ladder = h('ol', 'ladder');
     rail.append(this.ladder);
@@ -102,6 +133,13 @@ export class Hud {
 
     // --- right panel ---
     const panel = h('aside', 'panel');
+    panel.setAttribute('aria-label', 'Selected part and level information');
+    this.panel = panel;
+    this.sheetHandle = h('button', 'sheet-handle', '<span></span>');
+    this.sheetHandle.setAttribute('aria-label', 'Expand details');
+    this.sheetHandle.setAttribute('aria-expanded', 'false');
+    this.sheetHandle.addEventListener('click', () => this.setSheet(!this.sheetExpanded));
+    this.summary = h('div', 'sheet-summary');
     this.panelHead = h('div', 'panel-head');
     this.info = h('div', 'info');
     this.tabs = h('div', 'tabs');
@@ -113,7 +151,7 @@ export class Hud {
     }
     this.tabBody = h('div', 'tab-body');
     this.analysisHost = h('div', 'analysis');
-    panel.append(this.panelHead, this.info, this.tabs, this.tabBody, this.analysisHost);
+    panel.append(this.sheetHandle, this.summary, this.panelHead, this.info, this.tabs, this.tabBody, this.analysisHost);
 
     // --- bottom: scale bar + coupling ---
     const scale = h('div', 'scale');
@@ -124,7 +162,17 @@ export class Hud {
     this.coupling = h('div', 'coupling');
     const hint = h('div', 'hint', 'Drag to orbit · scroll to zoom · <b>double-click</b> a part to dive in · <b>Esc</b> to zoom out');
 
-    this.root.append(top, rail, panel, scale, this.coupling, hint);
+    this.perf = h('pre', 'perf-overlay');
+    this.perf.hidden = true;
+    this.toastEl = h('div', 'toast');
+    this.toastEl.setAttribute('role', 'status');
+    this.root.append(top, rail, panel, scale, this.coupling, hint, this.perf, this.toastEl);
+    const ro = new ResizeObserver(() => cb.layout());
+    for (const el of [top, rail, panel, this.coupling]) ro.observe(el);
+    const mq = window.matchMedia('(max-width: 900px)');
+    const place = () => this.placeForViewport(mq.matches);
+    mq.addEventListener('change', place);
+    place();
     this.buildLadder();
     store.subscribe((s, c) => this.onState(s, c));
     this.onState(store.get(), new Set(['init', 'level', 'mode', 'explode', 'cutaway', 'quality', 'labels', 'theoryTab', 'params', 'selected']));
@@ -167,6 +215,8 @@ export class Hud {
     if (c.has('quality')) this.quality.value = s.quality;
     if (c.has('theoryTab') || c.has('level')) this.renderTab(s);
     if (c.has('selected') || c.has('level')) this.renderInfo(s);
+    if (c.has('selected') || c.has('level') || c.has('params')) this.renderSummary(s);
+    if (c.has('level')) this.root.classList.remove('menu-open');
     if (this.analysis && (c.has('params') || c.has('init'))) this.analysis.update(s, c);
     if (c.has('params') || c.has('init')) this.renderCoupling(s);
   }
@@ -239,6 +289,89 @@ export class Hud {
     this.coupling.classList.remove('flash');
     void this.coupling.offsetWidth;
     this.coupling.classList.add('flash');
+  }
+
+  /** Mobile is not a shrunk desktop: tools and the coupling strip move into the menu / sheet. */
+  private placeForViewport(mobile: boolean): void {
+    this.mobile = mobile;
+    this.root.classList.toggle('is-mobile', mobile);
+    if (mobile) {
+      this.rail.append(this.tools);
+      this.panel.append(this.coupling);
+    } else {
+      this.top.insertBefore(this.tools, this.top.lastElementChild);
+      this.root.append(this.coupling);
+      this.setSheet(false);
+    }
+    this.cb.layout();
+  }
+
+  get isMobile(): boolean {
+    return this.mobile;
+  }
+
+  setSheet(expanded: boolean, focusAnalysis = false): void {
+    this.sheetExpanded = expanded;
+    this.panel.classList.toggle('expanded', expanded);
+    this.sheetHandle.setAttribute('aria-expanded', String(expanded));
+    this.sheetHandle.setAttribute('aria-label', expanded ? 'Collapse details' : 'Expand details');
+    if (!expanded) this.panel.scrollTop = 0;
+    if (expanded && focusAnalysis) requestAnimationFrame(() => this.analysisHost.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+    this.cb.layout();
+  }
+
+  /** Collapsed mobile inspector: name, one line, key parameter, Internal View, Experiment. */
+  private renderSummary(s: AppState): void {
+    const c = s.selected ? this.cb.componentInfo(s.selected) : null;
+    const L = LEVELS[s.level];
+    const name = c ? c.name : L.title;
+    const line = c ? (c.sub ?? '') + (c.desc ? ` — ${c.desc.split(/(?<=\.)\s/)[0]}` : '') : L.subtitle;
+    const key = c ? c.specs?.[0] ?? '' : LEVEL_KEY_PARAM[s.level](s.params);
+    const child = c ? c.child : MAIN_CHAIN[MAIN_CHAIN.indexOf(s.level) + 1];
+    this.summary.innerHTML = `
+      <div class="sum-kicker">${c ? 'SELECTED' : `LEVEL ${depth(s.level)} · ${L.crumb}`}</div>
+      <strong class="sum-name">${name}</strong>
+      <p class="sum-line">${line}</p>
+      ${key ? `<div class="sum-key">${key}</div>` : ''}
+      <div class="sum-actions">
+        ${child ? `<button class="sum-btn primary" data-act="enter">Internal view · ${LEVELS[child].crumb} ›</button>` : ''}
+        <button class="sum-btn" data-act="experiment">Experiment</button>
+      </div>`;
+    this.summary.querySelector('[data-act="enter"]')?.addEventListener('click', () => child && this.cb.navigate(child));
+    this.summary.querySelector('[data-act="experiment"]')?.addEventListener('click', () => this.setSheet(true, true));
+  }
+
+  setQualityState(mode: Quality, tier: string, step: number): void {
+    this.quality.value = mode;
+    this.qualityNote.textContent = mode === 'auto' ? `${tier}${step ? ` −${step}` : ''}` : '';
+    document.body.dataset.gfx = tier;
+  }
+
+  toast(msg: string, action?: { label: string; run: () => void }): void {
+    this.toastEl.innerHTML = `<span>${msg}</span>`;
+    if (action) {
+      const b = h('button', 'tool-btn', action.label);
+      b.addEventListener('click', () => {
+        action.run();
+        this.toastEl.classList.remove('show');
+      });
+      this.toastEl.append(b);
+    }
+    this.toastEl.classList.add('show');
+    clearTimeout((this.toastEl as unknown as { _t?: number })._t);
+    (this.toastEl as unknown as { _t?: number })._t = window.setTimeout(() => this.toastEl.classList.remove('show'), 7000);
+  }
+
+  /** Safe viewport (px from each edge) not covered by chrome — used for camera framing and callouts. */
+  insets(): { top: number; right: number; bottom: number; left: number } {
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+    const top = this.top.getBoundingClientRect();
+    const panel = this.panel.getBoundingClientRect();
+    if (this.mobile) return { top: top.bottom + 8, right: 12, bottom: H - panel.top + 8, left: 12 };
+    const rail = this.rail.getBoundingClientRect();
+    const coupling = this.coupling.getBoundingClientRect();
+    return { top: Math.max(top.bottom, 64) + 8, right: W - panel.left + 12, bottom: H - coupling.top + 12, left: rail.right + 12 };
   }
 
   /** Update the scale bar from the metres currently spanned by the viewport. */

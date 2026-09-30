@@ -135,6 +135,7 @@ export class DieLevel extends BaseLevel {
     for (const id of ['dsp', 'bf', 'adc']) this.addFlow('thermal', new FlowPath([c(id, 0.2), c(id, 3)], { color: COLORS.thermal, count: 10, size: 0.16, speed: 0.35 }));
     this.shower = new RadiationShower([c('sram', 0.1), c('cpu', 0.1), c('dsp', 0.12)], 6, 10, COLORS.radiation, 0.1);
     r.add(this.shower.group);
+    this.showers.push(this.shower);
   }
 
   anchorFor(child: LevelId): Anchor | null {

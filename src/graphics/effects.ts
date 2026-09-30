@@ -15,6 +15,7 @@ export class RadiationShower {
   private rand = mulberry32(99);
   private active = false;
   private alpha = 0;
+  private drawn = 0;
 
   constructor(private targets: THREE.Vector3[], private spawnRadius: number, count = 14, color: THREE.ColorRepresentation = '#c38bff', size = 0.12) {
     const n = count;
@@ -37,6 +38,7 @@ export class RadiationShower {
     this.group.add(this.heads, this.trails, this.flashes);
     this.group.userData.noFade = true;
     for (let i = 0; i < n; i++) this.tracks.push(this.spawn(this.rand()));
+    this.drawn = n;
   }
 
   private spawn(t0 = 0) {
@@ -48,6 +50,13 @@ export class RadiationShower {
 
   setActive(on: boolean): void {
     this.active = on;
+  }
+
+  setDensity(f: number): void {
+    this.drawn = Math.max(4, Math.ceil(this.tracks.length * Math.min(1, f)));
+    this.heads.geometry.setDrawRange(0, this.drawn);
+    this.flashes.geometry.setDrawRange(0, this.drawn);
+    this.trails.geometry.setDrawRange(0, this.drawn * 2);
   }
 
   setLevelAlpha(a: number): void {
@@ -72,6 +81,7 @@ export class RadiationShower {
     const p = new THREE.Vector3();
     const q = new THREE.Vector3();
     this.tracks.forEach((tr, i) => {
+      if (i >= this.drawn) return;
       tr.t += dt * tr.speed;
       if (tr.t >= 1 && tr.flash === 0) tr.flash = 1;
       if (tr.flash > 0) {

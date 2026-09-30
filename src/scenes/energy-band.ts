@@ -63,6 +63,7 @@ export class EnergyBandLevel extends BaseLevel {
     this.efP = new THREE.Mesh(new THREE.BoxGeometry(1, 0.03, 0.06), lineMat('#dfe6ef'));
     this.efN = new THREE.Mesh(new THREE.BoxGeometry(1, 0.03, 0.06), lineMat('#dfe6ef'));
     this.efP.position.z = this.efN.position.z = DEPTH;
+    this.efP.userData.keep = this.efN.userData.keep = true;
     const ef = group(this.efP, this.efN);
     r.add(ef);
     this.addComponent({ id: 'ef', name: 'Fermi Level EF', sub: 'split = qVd', object: ef, labelLocal: this.efLabel, desc: 'Electrochemical potential of carriers. Flat in equilibrium; under bias the quasi-Fermi levels separate by exactly qVd.', specs: ['EF − Ev = kT ln(Nv/Na) on p side'] });

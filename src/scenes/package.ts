@@ -35,7 +35,7 @@ export class PackageLevel extends BaseLevel {
     this.addComponent({ id: 'pcb', name: 'PCB', sub: 'Host board', object: pcb, labelLocal: v3(-9, 0, 6), desc: 'Host printed circuit board; BGA lands connect to internal power planes and SerDes routing.', specs: ['1.6 mm, 10 layers', 'Via-in-pad under BGA'] });
 
     // BGA solder balls
-    const balls = instancedGrid(new THREE.SphereGeometry(0.11, 12, 8), mat.solder(), 32, 32, 0.4, 0.4, 0.1);
+    const balls = instancedGrid(new THREE.SphereGeometry(0.11, 10, 6), mat.solder(), 32, 32, 0.4, 0.4, 0.1);
     const bga = group(balls);
     r.add(bga);
     this.addComponent({ id: 'bga', name: 'BGA Balls', sub: 'SAC305 · 1.0 mm pitch', object: bga, labelLocal: v3(6.2, 0.1, 6.2), desc: 'Ball-grid-array solder joints connecting package substrate to PCB.', specs: ['1024 balls (illustrative)', 'Pitch 1.0 mm', 'Underfill for thermal cycling'] });
@@ -47,7 +47,7 @@ export class PackageLevel extends BaseLevel {
     this.addComponent({ id: 'substrate', name: 'Substrate', sub: 'Organic build-up', object: substrate, labelLocal: v3(-7, 0.44, 7), desc: 'Organic build-up substrate fanning out the dense interposer C4 grid to the coarse BGA pitch; contains power planes and decoupling.', specs: ['12-layer ABF build-up', '35 × 35 mm', 'Embedded capacitors'] });
 
     // C4 bumps
-    const c4 = group(instancedGrid(new THREE.SphereGeometry(0.045, 8, 6), mat.solder(), 50, 50, 0.2, 0.2, 0.72));
+    const c4 = group(instancedGrid(new THREE.SphereGeometry(0.045, 6, 4), mat.solder(), 50, 50, 0.2, 0.2, 0.72));
     r.add(c4);
     this.addComponent({ id: 'c4', name: 'C4 Bumps', sub: '≈150 µm pitch', object: c4, labelLocal: v3(5, 0.72, 5), desc: 'Controlled-collapse chip-connection bumps joining the interposer to the substrate.', specs: ['Pitch ≈ 150–200 µm', 'SnAg solder'] });
 
@@ -129,6 +129,7 @@ export class PackageLevel extends BaseLevel {
     for (const [x, z] of [[-2.8, -1.5], [-0.6, 1.2], [2.8, 0], [-1.6, 0]]) this.addFlow('thermal', new FlowPath([v3(x, 1.1, z), v3(x, DIE_TOP + 0.35, z), v3(x * 1.3, 4, z * 1.3)], { color: COLORS.thermal, count: 12, size: 0.14, speed: 0.35 }));
     this.shower = new RadiationShower([v3(DIE_X, 1.2, 0), v3(DIE_X + 1, 1.2, 1), v3(2.8, 1.2, 1.9)], 6, 14, COLORS.radiation, 0.1);
     r.add(this.shower.group);
+    this.showers.push(this.shower);
   }
 
   anchorFor(child: LevelId): Anchor | null {

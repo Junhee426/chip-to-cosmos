@@ -112,20 +112,22 @@ export class CosmosLevel extends BaseLevel {
     this.isl = new THREE.LineSegments(ig, new THREE.LineBasicMaterial({ color: COLORS.signal, transparent: true, opacity: 0.08, depthWrite: false, blending: THREE.AdditiveBlending }));
     this.isl.frustumCulled = false;
     // orbit rings
-    const rings = new THREE.Group();
+    // all orbit planes in a single LineSegments draw call
     const ringMat = new THREE.LineBasicMaterial({ color: '#6d88b0', transparent: true, opacity: 0.045, depthWrite: false });
+    const ringPts: THREE.Vector3[] = [];
     SHELLS.forEach((s) => {
       const r = RE * (RE_KM + s.altKm) / RE_KM;
       for (let p = 0; p < s.planes; p++) {
-        const pts: THREE.Vector3[] = [];
-        for (let k = 0; k <= 128; k++) {
-          const v = new THREE.Vector3();
-          orbitState((2 * Math.PI * p) / s.planes, (s.incDeg * Math.PI) / 180, (2 * Math.PI * k) / 128, r, v);
-          pts.push(v);
+        const a = new THREE.Vector3();
+        const b = new THREE.Vector3();
+        for (let k = 0; k < 128; k++) {
+          orbitState((2 * Math.PI * p) / s.planes, (s.incDeg * Math.PI) / 180, (2 * Math.PI * k) / 128, r, a);
+          orbitState((2 * Math.PI * p) / s.planes, (s.incDeg * Math.PI) / 180, (2 * Math.PI * (k + 1)) / 128, r, b);
+          ringPts.push(a.clone(), b.clone());
         }
-        rings.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), ringMat));
       }
     });
+    const rings = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(ringPts), ringMat);
     const constellation = new THREE.Group();
     constellation.add(this.sats, this.glow, this.isl, rings);
     this.root.add(constellation);
@@ -298,7 +300,7 @@ export class CosmosLevel extends BaseLevel {
       this.updateOrbits();
     }
     syncPointScale(this.glow);
-    const s = 1 + 0.12 * Math.sin(this.time * 3);
+    const s = this.decorative ? 1 + 0.12 * Math.sin(this.time * 3) : 1;
     this.heroRing.scale.setScalar(s);
     this.heroRing.lookAt(this.hero.position.clone().multiplyScalar(2));
     void state;

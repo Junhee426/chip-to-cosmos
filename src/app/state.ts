@@ -3,7 +3,7 @@ import type { Weighting } from '../models/array-factor';
 import type { LevelId } from './navigation';
 
 export type EngMode = 'structure' | 'signal' | 'power' | 'thermal' | 'radiation';
-export type Quality = 'high' | 'balanced' | 'performance';
+export type Quality = 'auto' | 'high' | 'balanced' | 'performance';
 export type TheoryTab = 'intuition' | 'engineering' | 'theory';
 
 export interface Params {
@@ -124,7 +124,7 @@ export function createStore(): Store {
     mode: 'structure',
     explode: 0,
     cutaway: false,
-    quality: 'balanced',
+    quality: 'auto',
     selected: null,
     theoryTab: 'intuition',
     labels: true,
