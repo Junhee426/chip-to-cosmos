@@ -393,7 +393,7 @@ export class SatelliteLevel extends BaseLevel {
     this.beamCenter.scale.setScalar(Math.max(1.2, this.footprintRadius * 0.08));
     this.terminalAnchor.position.copy(centre);
     this.terminalAnchor.visible = !!c;
-    this.beamAnchor.position.copy(apex).lerp(centre, 0.42);
+    this.beamAnchor.position.copy(apex).lerp(centre, 0.05); // near the aperture: readable in close satellite views
     // label the service area at the contour point closest to the camera side (+Z), i.e. a visible edge
     if (ok) this.edgeAnchor.position.copy(rim.reduce((a2, q) => (q.z > a2.z ? q : a2)));
     this.edgeAnchor.visible = ok;
