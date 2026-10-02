@@ -140,3 +140,62 @@ export function beamHero(store: Store): { el: HTMLElement; update: (s: AppState,
     },
   };
 }
+
+/**
+ * Array Compare: 8×8 vs 32×32 for the current spacing, steering and taper, under an
+ * explicit RF-power assumption (default: total RF fixed, so only the aperture differs).
+ * Numbers come from the same beam model; "Show" applies a size to the live scene.
+ */
+export function arrayCompare(store: Store): { el: HTMLElement; update: (s: AppState, c: Set<string>) => void } {
+  const el = h('div', 'compare');
+  let mode: 'total-rf-fixed' | 'per-element-fixed' = 'total-rf-fixed';
+  const modeSel = segmented('Power assumption for the comparison', [{ value: 'total-rf-fixed', label: 'Total RF fixed' }, { value: 'per-element-fixed', label: 'Per element fixed' }] as const, mode, (v) => {
+    mode = v;
+    render(store.get());
+  });
+  const table = h('div', 'cmp-table');
+  table.setAttribute('role', 'table');
+  table.setAttribute('aria-label', 'Array size comparison');
+  const chain = h('p', 'note cmp-chain');
+  const show = h('div', 'cmp-show');
+  for (const n of [8, 32]) {
+    const b = h('button', 'pst-btn', `Show ${n}×${n}`);
+    b.type = 'button';
+    b.addEventListener('click', () => store.setParams({ arrayN: n, powerMode: mode }));
+    show.append(b);
+  }
+  el.append(modeSel.el, table, show, chain);
+  const render = (s: AppState) => {
+    const q = s.params;
+    const A = beamSolution({ ...q, arrayN: 8, powerMode: mode });
+    const B = beamSolution({ ...q, arrayN: 32, powerMode: mode });
+    const row = (label: string, a: string, b: string, d: string) => `<div class="cmp-row" role="row"><span role="rowheader">${label}</span><b role="cell">${a}</b><b role="cell">${b}</b><em role="cell">${d}</em></div>`;
+    const dd = (x: number, y: number, dgt = 1, unit = '') => `${y - x >= 0 ? '+' : '−'}${Math.abs(y - x).toFixed(dgt)}${unit}`;
+    const ratio = (x: number, y: number) => (x > 0 ? `×${(y / x).toFixed(2)}` : '—');
+    const LA = A.link;
+    const LB = B.link;
+    table.innerHTML =
+      `<div class="cmp-row cmp-head" role="row"><span></span><b role="columnheader">8×8</b><b role="columnheader">32×32</b><em role="columnheader">change</em></div>` +
+      row('Aperture', `${(8 * q.spacingLambda).toFixed(1)}λ`, `${(32 * q.spacingLambda).toFixed(1)}λ`, '×4') +
+      row('Gain', `${A.pattern.gainDbi.toFixed(1)} dBi`, `${B.pattern.gainDbi.toFixed(1)} dBi`, dd(A.pattern.gainDbi, B.pattern.gainDbi, 1, ' dB')) +
+      row('HPBW', `${A.pattern.hpbwDeg.toFixed(1)}°`, `${B.pattern.hpbwDeg.toFixed(1)}°`, ratio(A.pattern.hpbwDeg, B.pattern.hpbwDeg)) +
+      row('Footprint area', `${km2(A.footprint.areaKm2)} km²`, `${km2(B.footprint.areaKm2)} km²`, ratio(A.footprint.areaKm2, B.footprint.areaKm2)) +
+      row('Total RF', `${A.power.rfW.toFixed(0)} W`, `${B.power.rfW.toFixed(0)} W`, ratio(A.power.rfW, B.power.rfW)) +
+      row('EIRP', `${A.power.eirpDbw.toFixed(1)} dBW`, `${B.power.eirpDbw.toFixed(1)} dBW`, dd(A.power.eirpDbw, B.power.eirpDbw, 1, ' dB')) +
+      row('Link margin', LA ? `${sgn(LA.marginDb)} dB` : '—', LB ? `${sgn(LB.marginDb)} dB` : '—', LA && LB ? dd(LA.marginDb, LB.marginDb, 1, ' dB') : '—');
+    chain.innerHTML =
+      mode === 'total-rf-fixed'
+        ? 'ARRAY SIZE ↑ → APERTURE ↑ → DIRECTIVITY ↑ → HPBW ↓ → FOOTPRINT ↓ (same total RF power: the difference is the aperture alone).'
+        : 'Per element fixed: ARRAY SIZE ↑ → ELEMENT COUNT ↑ → TOTAL RF POWER ↑ <i>and</i> DIRECTIVITY ↑ — EIRP grows by both effects.';
+  };
+  let timer = 0;
+  return {
+    el,
+    update: (_s, c) => {
+      if (!beamChanged(c) && !c.has('init')) return;
+      // two extra pattern solves: deferred while a slider is being dragged
+      clearTimeout(timer);
+      timer = window.setTimeout(() => render(store.get()), c.has('init') ? 0 : 160);
+    },
+  };
+}

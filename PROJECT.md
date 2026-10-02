@@ -71,6 +71,35 @@ scale lives in the same navigation system and is linked by calculated models.
 - [ ] Hardware-GPU and real-device frame times for the demo — not yet recorded (SwiftShader only)
 - [ ] Beam-squint is searched in the scan plane only (sub-0.1° effect off-plane, see MODEL_LIMITATIONS)
 
+## V4 status (signature experience)
+
+- [x] P0: Earth-facing array invariant — fixed mounting `ARRAY_TO_BODY`, zero steering → Earth centre (tests, any orbit frame)
+- [x] P0: steering never rotates the panel (unit test on the mounting, browser test on the scene graphs)
+- [x] P0: Quick Demo (~15 s) and the existing Engineering Demo in one controller (`play('quick' | 'engineering' | 'grating')`)
+- [x] P0: poster frame + presentation mode, `?view=poster`, landing over the live satellite scene
+- [x] P0: beam model profiled; AF sum 3–5× faster; pattern / footprint / link caches; slider and scene updates once per frame
+- [x] P0: hero browser checks (`scripts/hero.mjs`)
+- [x] P1: grating-lobe mini demo; main = solid, grating lobe = dashed + labelled "unintended illumination"
+- [x] P1: Array Compare (8×8 vs 32×32, explicit power assumption) · Link Budget X-ray ↔ 3D emphasis
+- [x] P1: mobile poster (3 metrics, Try it by touch) — **emulated** only
+- [ ] Hardware-GPU and real-device frame times (phone / laptop) — not measured in this environment
+- [ ] Web Worker for the beam model — not needed by the measurements (≤ 5 ms per state change on this CPU)
+
+### Signature stories (structure for later versions)
+
+1. **CHIP** — transistor → ADC/DSP → power → heat → radiator (exists as the coupling strip and the vertical slice; no scripted demo yet)
+2. **BEAM** — phase → beam → footprint → link (**V4: Quick Demo, Engineering Demo, Grating Demo**)
+3. **NETWORK** — orbit → visibility → handover → continuous service (design note below)
+
+*Network demo design note.* COSMOS already has the pieces a handover story needs: the Walker
+shells with per-slot orbit states, the hero orbit frame, a ground terminal placed by the beam
+model, and per-satellite world positions each frame. A handover demo would (1) pin the terminal
+at a fixed ground point instead of the beam centre, (2) compute elevation from the terminal to
+every satellite with the same `elevationDeg` helper, (3) pick the serving satellite by a rule
+(highest elevation with hysteresis), and (4) draw the serving link and a handover marker. Not
+implemented in V4; multi-beam, frequency reuse and beam hopping are deliberately deferred until
+the single-beam story is complete.
+
 ## Roadmap (post-V1)
 
 - Doppler & rain-fade (ITU-R P.618) in the link budget; interference (C/I)

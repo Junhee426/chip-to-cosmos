@@ -234,6 +234,7 @@ async function boot(): Promise<void> {
       labels.setOnly(s.presentation ? PRESENTATION_LABELS : null);
       if (!s.presentation && poster.view !== 'hidden') poster.setView('hidden');
     }
+    if (c.has('level') && s.emphasis) queueMicrotask(() => store.set({ emphasis: null }));
     if (c.has('emphasis') || c.has('level')) {
       const id = s.emphasis ? XRAY_TARGETS[s.level]?.[s.emphasis as XrayKey] ?? null : null;
       mgr.current?.emphasize(id);

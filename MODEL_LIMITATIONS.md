@@ -49,6 +49,12 @@ shown in each level's THEORY tab.
   zero yaw; along/cross-track extents and area are measured in the tangent plane at the beam centre
   (accurate while the footprint ≪ Earth radius; near the limb the contour may be clipped and is
   flagged). The beam maximum includes element-pattern squint, searched in the scan plane.
+- **Beam steering**: electronic only. The array panel is fixed to the nadir deck and stays Earth-facing;
+  steering changes ideal, continuous element phases (no quantisation, no scan blindness, no mutual
+  coupling), not the panel orientation.
+- **Satellite markers and camera**: in COSMOS and on the poster the satellite is enlarged for
+  visibility; camera paths, pulses and particles are illustrative. Footprint, gain, EIRP and link
+  margin are calculated.
 - **Power scaling**: in *fixed per element* mode the total RF power grows with N², so changing N
   changes EIRP by both directivity and power; *fixed total RF* isolates the directivity effect.
 - **Power/thermal**: orbit-average, single-node radiator at 300 K, effective sink 200 K,
