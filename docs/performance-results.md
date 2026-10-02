@@ -84,3 +84,53 @@ if real-device traces show a visible hitch.
 | Visible controls under 44 × 44 px | 0 |
 | Draw calls (satellite / mosfet / beam lab) | 64 / 23 / 20 |
 | Page errors | none |
+
+---
+
+# V2 measurements (2026-10-02)
+
+Same environment class as above: cloud container, **4 vCPU, SwiftShader software rendering**,
+Chromium 141 headless. Frame times are CPU-bound and are not evidence for the FPS targets.
+
+## Draw calls per frame — V1 → V2
+
+| Level | V1 high | V2 high | V1 performance | V2 performance | why it changed |
+|---|---|---|---|---|---|
+| cosmos | 31 | 31 | 16 | 16 | — |
+| satellite | 122 | 146 | 67 | 80 | hero detail: bezels, tile seams, MLI tape, heat pipes, yoke, hinges, thruster |
+| beam lab | 37 | 50 | 20 | 33 | Earth footprint, ground plane, footprint edges |
+| payload | 109 | 109¹ | 48 | 48 | — |
+| pcb | 101 | 101 | 53 | 53 | — |
+| package | 51 | 51 | 23 | 23 | — |
+| die | 55 | 55 | 27 | 27 | — |
+| mosfet | 50 | 50 | 23 | 23 | — |
+| silicon | 24 | 24 | 9 | 9 | — |
+| energy | 28 | 28 | 13 | 13 | — |
+
+¹ The high-tier payload sample read 50 (identical to the beam-lab row, a sampling-timing artefact);
+the balanced tier — same geometry, same draw path — measured 109. All levels remain under the desktop
+(< 300) and mobile (< 150) engineering targets; performance tier ≤ 80.
+
+## Memory — 10 cycles satellite → die → satellite (balanced)
+
+| Cycle | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| geometries | 127 | 127 | 127 | 127 | 127 | 127 | 127 | 127 | 127 | 127 |
+| textures | 27 | 27 | 27 | 27 | 27 | 27 | 27 | 27 | 27 | 27 |
+| programs | 54 | 54 | 54 | 54 | 54 | 54 | 54 | 54 | 54 | 54 |
+| JS heap MB² | 24 | 28 | 25 | 21 | 31 | 23 | 23 | 23 | 23 | 23 |
+
+² `performance.memory`, Chromium-only auxiliary signal; it fluctuates with GC and does not trend upward.
+Flights were shortened (`motionScale = 0.2`) for this run; every step, renormalisation, level build
+and disposal still executes.
+
+## Render targets — 6 rounds of quality changes (high → performance → balanced) + resize
+
+Textures 27 and geometries 127 after every round: post-processing targets, shadow maps and the
+PMREM environment are released when regenerated.
+
+## Transition hitch (open issue, unchanged)
+
+Worst frame per cycle ≈ 14–17 s under SwiftShader. It is the first visit to a non-resident level
+(build + shader pre-compile on the main thread before the flight starts). Real GPUs compile far
+faster, but level construction is still synchronous — next step if real-device traces show it.
