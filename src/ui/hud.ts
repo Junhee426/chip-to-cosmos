@@ -512,7 +512,7 @@ export class Hud {
       <div class="sum-actions">
         ${child ? `<button class="sum-btn primary" data-act="enter" aria-label="Internal view: ${LEVELS[child].title}">Inside · ${LEVELS[child].crumb} ›</button>` : ''}
         <button class="sum-btn" data-act="experiment">Experiment</button>
-        ${BEAM_LEVELS.has(s.level) && !c ? '<button class="sum-btn" data-act="demo">▶ Beam demo</button>' : ''}
+        ${BEAM_LEVELS.has(s.level) && !c ? '<button class="sum-btn" data-act="demo" aria-label="Run the beam demo">▶ Demo</button>' : ''}
       </div>`;
     this.summary.querySelector('[data-act="demo"]')?.addEventListener('click', () => this.cb.runBeamDemo());
     this.summary.querySelector('[data-act="enter"]')?.addEventListener('click', () => child && this.cb.navigate(child));

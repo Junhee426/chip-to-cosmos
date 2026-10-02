@@ -448,6 +448,7 @@ body.demo-running .coupling, body.demo-running .hint { opacity: 0.35; }
   .causal-step b { font-size: 10px; overflow: hidden; text-overflow: ellipsis; }
   .causal-step span { font-size: 8.5px; }
   .hud.causal-on .scale { top: calc(108px + env(safe-area-inset-top)); }
+  .hud.demo-on .scale { display: none; }
   .hero-demo { top: calc(108px + env(safe-area-inset-top)); left: 8px; right: 8px; max-width: none; padding: 8px 10px; }
   .hd-title { font-size: 14px; }
   .hd-sub { font-size: 11px; }

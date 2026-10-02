@@ -397,7 +397,9 @@ export class CosmosLevel extends BaseLevel {
     for (const s2 of sol.secondary) if (s2.earth.center) pts.push(new THREE.Vector3(...s2.earth.center).multiplyScalar(S * LIFT).applyMatrix4(this.heroBasis));
     const mid = pts.reduce((a, b) => a.add(b), new THREE.Vector3()).divideScalar(pts.length);
     const extent = Math.max(...pts.map((q) => q.distanceTo(mid)));
-    const k = Math.max(0.6, extent / 0.36) * (stage === 'link' ? 1.25 : 1);
+    // portrait screens: back off so the satellite → footprint line still fits across the width
+    const aspect = (this.ctx.camera as THREE.PerspectiveCamera | undefined)?.aspect ?? 1.6;
+    const k = Math.max(0.6, extent / 0.36) * (stage === 'link' ? 1.25 : 1) * Math.min(3, Math.max(1, 1.3 / aspect));
     // look across the ground track (perpendicular to the satellite → footprint line), slightly from above
     return { pos: mid.clone().addScaledVector(side, 1.15 * k).addScaledVector(up, 0.42 * k).addScaledVector(along, -0.2 * k), target: mid };
   }
