@@ -36,7 +36,6 @@ When sustained frame time exceeds the class budget, the controller degrades (§6
 | maxDpr | 2 | 1.5 | 1 |
 | shadows / map | on / 2048 | on / 1024 | off |
 | bloom | on | on | off |
-| SSAO | — | — | — |
 | particles | 1 | 0.6 | 0.3 |
 | environment (PMREM) | 256 | 128 | 64 |
 | model LOD | 0 | 1 | 2 |
@@ -44,8 +43,8 @@ When sustained frame time exceeds the class budget, the controller degrades (§6
 | cinematic effects | on | on | off |
 | label density | 1 | 0.8 | 0.5 |
 
-*SSAO*: the field exists but no SSAO pass is implemented — the dark, rim-lit art
-style gains little from it and it is one of the most expensive passes on mobile GPUs.
+*SSAO*: not implemented and not part of the configuration or the degradation ladder (removed in V2
+— a step that changes nothing must not exist).
 *Antialias*: canvas MSAA is chosen at start-up from the initial tier; the
 post-processing target's MSAA follows the live tier (the canvas AA does not apply
 once the composer renders off-screen).
@@ -55,7 +54,7 @@ once the composer renders off-screen).
 No User-Agent sniffing. Signals: viewport width, `devicePixelRatio`,
 `hardwareConcurrency`, `deviceMemory` (when available) and `(pointer: coarse)`.
 
-- `performance` if width ≤ 768, coarse pointer, ≤ 4 cores or ≤ 4 GB
+- `performance` if the device is **GPU-constrained**: width ≤ `COMPACT_GPU_MAX` (768 px), coarse pointer, ≤ 4 cores or ≤ 4 GB
 - `balanced` if width ≤ 1280, DPR > 2 or ≤ 8 cores
 - otherwise `high`
 
@@ -84,9 +83,13 @@ Touch devices may auto-climb at most to `balanced` (`tierCeiling`).
 
 ## 7. Degradation order — `DEGRADATION_ORDER`
 
-1. particle count → 2. label density → 3. bloom → 4. SSAO → 5. shadow resolution →
-6. shadows off → 7. DPR (×0.75, floor 0.75) → 8. environment resolution →
-9. repeated-geometry LOD → 10. decorative animation (vignette/grain, flicker, pulses).
+1. particle count → 2. label density → 3. bloom → 4. shadow resolution → 5. shadows off →
+6. DPR (×0.75, floor 0.75) → 7. environment resolution → 8. repeated-geometry LOD →
+9. decorative animation (vignette/grain, flicker, pulses).
+
+The ladder is **feature-aware** (`effectiveSteps`): a step that would change nothing for the
+current tier (bloom already off, shadows already off …) is skipped, so every controller step has
+a real effect and `performance` has a shorter ladder than `high`.
 
 Kept to the end: selection, navigation, structure, simulation results
 (MOSFET channel, carriers, radiation surface, bands), signal path tubes, essential
@@ -145,7 +148,11 @@ satellite → die → satellite cycles and records geometries/textures/programs/
 
 ## 14–22. Mobile
 
-- **Layout** (≤ 900 px): top navigation `‹ back · breadcrumb · ⋯ menu`; the 3D view
+- **Layout vs GPU**: two separate breakpoints. `MOBILE_LAYOUT_QUERY`
+  (`max-width: 900px`, or `max-height: 520px` with a coarse pointer) switches the UI; `COMPACT_GPU_MAX`
+  (768 px) plus cores/memory/pointer selects the GPU policy. A narrow desktop window gets the
+  mobile layout but keeps the desktop GPU policy. A test checks the CSS uses the same query.
+- **Layout**: top navigation `‹ back · breadcrumb · ⋯ menu`; the 3D view
   fills the screen; the inspector is a **bottom sheet** (42 dvh collapsed, 78 dvh
   expanded). The scale ladder, modes, explode, cutaway and quality live in the menu.
 - **Collapsed sheet**: object name, one-line explanation, one key calculated
@@ -172,3 +179,18 @@ satellite → die → satellite cycles and records geometries/textures/programs/
 Desktop: all callouts at `labelDensity`, the selected one always first.
 Mobile: at most **4** callouts — the selected one, then navigable/essential parts —
 further reduced by the tier's density; mono sub-lines are hidden.
+
+## V2 additions
+
+- **Landscape phones**: the inspector docks to the right (≤ 44 vw collapsed) instead of covering
+  the bottom; the safe viewport follows it.
+- **Browser toolbars / orientation**: `visualViewport` resize and `orientationchange` re-run layout.
+- **Input**: `PointerTracker` — taps only from single-pointer gestures, `pointercancel` and `pointerup`
+  always clear state; manual input cancels cinematic (non-critical) camera flights but never a scale
+  transition (frame renormalisation must complete).
+- **Reduced motion**: transitions run at 0.35× duration, the intro never autoplays.
+- **Harness**: `--only=memory` runs 10 satellite → die → satellite cycles and 6 rounds of quality
+  changes + resizes (render-target leak check); `--only=devices` checks 390×844, 430×932, 768×1024,
+  820×1180 (portrait + landscape) and 1280×800 / 1440×900 for control overlap, touch-target size,
+  sheet behaviour, selected-part visibility and the Internal View → Back journey. These are
+  **emulations**, not real-device measurements.
