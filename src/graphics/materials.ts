@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { crinkleTexture, radiatorTexture, solarCellTexture } from './textures';
+import { carbonTexture, crinkleTexture, radiatorTexture, solarCellTexture } from './textures';
 
 /**
  * Material system. Every call returns a NEW material instance so that each
@@ -83,6 +83,15 @@ export const mat = {
   },
   radiator(): THREE.MeshStandardMaterial {
     return new THREE.MeshStandardMaterial({ map: radiatorTexture(), color: 0xb8bec8, metalness: 0.2, roughness: 0.45 });
+  },
+  /** Carbon-fibre composite: dark, low metal, weave visible only in grazing light. */
+  cfrp(): THREE.MeshStandardMaterial {
+    const t = carbonTexture();
+    return new THREE.MeshStandardMaterial({ color: 0x2b2e33, metalness: 0.15, roughness: 0.42, bumpMap: t, bumpScale: 0.6, roughnessMap: t });
+  },
+  /** White thermal paint (radiator frames, bezels): high albedo, diffuse. */
+  whitePaint(): THREE.MeshStandardMaterial {
+    return new THREE.MeshStandardMaterial({ color: 0xd9dde3, metalness: 0, roughness: 0.75 });
   },
   darkPanel(): THREE.MeshStandardMaterial {
     return new THREE.MeshStandardMaterial({ color: 0x1b1f26, metalness: 0.4, roughness: 0.5 });

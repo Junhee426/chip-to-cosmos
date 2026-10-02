@@ -16,7 +16,8 @@ const url = pos[0] ?? 'http://localhost:4173';
 const out = pos[1] ?? 'perf-out';
 const gpu = process.argv.includes('--gpu');
 const onlyArg = process.argv.find((a) => a.startsWith('--only='));
-const only = new Set(onlyArg ? onlyArg.slice(7).split(',') : ['tiers', 'memory', 'mobile']);
+const only = new Set(onlyArg ? onlyArg.slice(7).split(',') : ['tiers', 'memory', 'mobile', 'devices']);
+const CYCLES = Number(process.argv.find((a) => a.startsWith('--cycles='))?.slice(9) ?? 10);
 mkdirSync(out, { recursive: true });
 const LEVELS = ['cosmos', 'satellite', 'array', 'payload', 'pcb', 'package', 'die', 'mosfet', 'silicon', 'energy'];
 const args = gpu ? ['--ignore-gpu-blocklist', '--enable-gpu-rasterization'] : ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'];
@@ -72,7 +73,7 @@ const memory = [];
 const hitch = [];
 if (only.has('memory')) {
 const { ctx: c2, page: p2 } = await open({ width: 1600, height: 900 }, {}, '&quality=balanced');
-for (let k = 0; k < 4; k++) {
+for (let k = 0; k < CYCLES; k++) {
   await p2.evaluate(() => window.c2c.mgr.jumpTo('satellite'));
   await p2.waitForTimeout(800);
   await p2.evaluate(() => window.c2c.stats.clear());
@@ -86,6 +87,21 @@ for (let k = 0; k < 4; k++) {
 console.log('\nmemory after satellite→die→satellite cycles');
 console.table(memory);
 console.table(hitch);
+// render-target / texture leak check: quality changes and resizes allocate post targets, shadow maps and PMREM
+const rt = [];
+for (let k = 0; k < 6; k++) {
+  for (const q of ['high', 'performance', 'balanced']) {
+    await p2.evaluate((m) => window.c2c.store.set({ quality: m }), q);
+    await p2.waitForTimeout(150);
+  }
+  await p2.setViewportSize({ width: k % 2 ? 1200 : 1600, height: 900 });
+  await p2.waitForTimeout(400);
+  rt.push(await p2.evaluate(() => ({ round: 0, tex: window.c2c.renderer.info.memory.textures, geo: window.c2c.renderer.info.memory.geometries })));
+  rt[rt.length - 1].round = k + 1;
+}
+console.log('\nrender targets after quality/resize rounds');
+console.table(rt);
+memory.push({ rtRounds: rt });
 await c2.close();
 }
 
@@ -122,7 +138,83 @@ await c3.close();
 }
 await browser.close();
 
-writeFileSync(`${out}/perf.json`, JSON.stringify({ env, tiers, memory, hitch, mobile, mobileLevels: mob, errors }, null, 2));
+// ---- 4. device layouts & mobile journey (emulation — not a real-device measurement) ----
+const devices = [];
+if (only.has('devices')) {
+  const sizes = [
+    ['phone-390', 390, 844, true], ['phone-430', 430, 932, true], ['tablet-768', 768, 1024, true], ['tablet-820', 820, 1180, true],
+    ['desktop-1280', 1280, 800, false], ['desktop-1440', 1440, 900, false],
+  ];
+  for (const [name, w, h, touch] of sizes) {
+    for (const orient of touch ? ['portrait', 'landscape'] : ['landscape']) {
+      const vw = orient === 'portrait' ? w : Math.max(w, h);
+      const vh = orient === 'portrait' ? h : Math.min(w, h);
+      const { ctx, page } = await open({ width: vw, height: vh }, touch ? { deviceScaleFactor: 2, isMobile: true, hasTouch: true } : {});
+      await page.waitForTimeout(2000);
+      const r = await page.evaluate(() => {
+        const vis = [...document.querySelectorAll('.hud button, .hud select, .hud input[type=range], .callout.clickable')].filter((b) => b.offsetParent !== null && getComputedStyle(b).visibility !== 'hidden');
+        const rects = vis.map((b) => ({ b, r: b.getBoundingClientRect() })).filter((x) => x.r.width > 0 && x.r.height > 0 && x.r.bottom > 0 && x.r.top < innerHeight);
+        const coarse = matchMedia('(pointer: coarse)').matches;
+        const small = coarse ? rects.filter((x) => x.b.tagName !== 'INPUT' && (x.r.height < 44 || x.r.width < 44) && !x.b.classList.contains('callout')).map((x) => x.b.className) : [];
+        let overlaps = 0;
+        const ov = [];
+        for (let i = 0; i < rects.length; i++)
+          for (let j = i + 1; j < rects.length; j++) {
+            const a = rects[i].r, b = rects[j].r;
+            if (rects[i].b.contains(rects[j].b) || rects[j].b.contains(rects[i].b)) continue;
+            const ix = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+            const iy = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+            if (ix > 2 && iy > 2) { overlaps++; ov.push(`${rects[i].b.className}×${rects[j].b.className}`); }
+          }
+        const panel = document.querySelector('.panel').getBoundingClientRect();
+        const mobile = document.querySelector('.hud').classList.contains('is-mobile');
+        return { mobile, panel: `${Math.round(panel.left)},${Math.round(panel.top)} ${Math.round(panel.width)}×${Math.round(panel.height)}`, freeArea: Math.round(((innerWidth - (panel.left > innerWidth * 0.3 && panel.height > innerHeight * 0.6 ? innerWidth - panel.left : 0)) * (panel.top > innerHeight * 0.3 ? panel.top : innerHeight)) / (innerWidth * innerHeight) * 100), small: small.length, smallList: [...new Set(small)].slice(0, 4).join(' '), overlaps, overlapList: ov.slice(0, 3).join(' | ') };
+      });
+      // journey: select a part from the parts list → it must be in the free viewport;
+      // Internal view → child level; back → parent; expand sheet; experiment
+      const j = {};
+      if (r.mobile) {
+        await page.evaluate(() => document.querySelector('.hud .sheet-handle').click());
+        await page.waitForTimeout(500);
+        j.expand = await page.evaluate(() => document.querySelector('.panel').classList.contains('expanded'));
+        const part = await page.$('.parts .part');
+        if (part) {
+          await part.tap();
+          await page.waitForTimeout(2500);
+          j.selected = await page.evaluate(() => window.c2c.store.get().selected);
+          j.selectedVisible = await page.evaluate(() => {
+            const id = window.c2c.store.get().selected;
+            const c = window.c2c.mgr.current.components.find((k) => k.id === id);
+            if (!c) return null;
+            // anchor of the part's callout (or its origin) in world space
+            const p = c.object.getWorldPosition(c.object.position.clone());
+            return window.c2c.viewport.isVisible(p);
+          });
+        }
+        await page.evaluate(() => document.querySelector('.hud .sheet-handle').click());
+        await page.waitForTimeout(400);
+        await page.evaluate(() => window.c2c.store.set({ selected: null }));
+        await page.waitForTimeout(200);
+        await page.tap('.sheet-summary [data-act="enter"]');
+        await page.waitForFunction(() => !window.c2c.store.get().transitioning && window.c2c.store.get().level !== 'satellite', null, { timeout: 120000 });
+        j.internalView = await page.evaluate(() => window.c2c.store.get().level);
+        await page.tap('.nav-back');
+        await page.waitForFunction(() => !window.c2c.store.get().transitioning && window.c2c.store.get().level === 'satellite', null, { timeout: 120000 });
+        j.back = await page.evaluate(() => window.c2c.store.get().level);
+        await page.tap('.sheet-summary [data-act="experiment"]');
+        await page.waitForTimeout(800);
+        j.experiment = await page.evaluate(() => document.querySelector('.panel').classList.contains('expanded'));
+      }
+      await page.screenshot({ path: `${out}/device-${name}-${orient}.png` });
+      devices.push({ device: name, orient, size: `${vw}×${vh}`, ...r, ...j });
+      await ctx.close();
+    }
+  }
+  console.log('\ndevices (emulated)');
+  console.table(devices);
+}
+
+writeFileSync(`${out}/perf.json`, JSON.stringify({ env, tiers, memory, hitch, mobile, mobileLevels: mob, devices, errors }, null, 2));
 if (errors.length) {
   console.error('Page errors:\n' + errors.join('\n'));
   process.exit(1);

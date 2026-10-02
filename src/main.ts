@@ -243,7 +243,7 @@ async function boot(): Promise<void> {
   }).start();
 
   (window as unknown as { c2c: unknown }).c2c = {
-    store, mgr, rig, scene, renderer, hud, post,
+    store, mgr, rig, scene, renderer, hud, post, viewport,
     quality: perfCtl.quality,
     stats: perfCtl.stats,
     frameInfo: () => ({ ...perfCtl.frameInfo }),

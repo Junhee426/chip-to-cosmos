@@ -94,6 +94,24 @@ export class FlowPath {
     this.active = on;
   }
 
+  /**
+   * Signal grammar: particles travel as packets (bright head, fading tail) so data
+   * flow reads as discrete symbols, distinct from continuous power/heat streams.
+   */
+  asPulses(perPacket = 5): this {
+    const n = this.offsets.length;
+    const packets = Math.max(1, Math.floor(n / perPacket));
+    const phase = this.points.geometry.getAttribute('aPhase') as THREE.BufferAttribute;
+    for (let i = 0; i < n; i++) {
+      const pkt = Math.floor(i / perPacket) % packets;
+      const k = i % perPacket;
+      this.offsets[i] = (pkt / packets - k * 0.006 + 1) % 1;
+      phase.setX(i, [1, 0.7, 0.45, 0.3, 0.18][k] ?? 0.15);
+    }
+    phase.needsUpdate = true;
+    return this;
+  }
+
   /** Decorative density (0..1]; the guide tube — the path itself — is always kept. */
   setDensity(f: number): void {
     this.drawn = Math.max(3, Math.ceil(this.offsets.length * Math.min(1, f)));

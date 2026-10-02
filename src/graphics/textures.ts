@@ -264,3 +264,26 @@ export function glowSprite(): THREE.Texture {
     return finish(c);
   });
 }
+
+/** Carbon-fibre (CFRP) 2×2 twill weave, used as bump + subtle colour variation. */
+export function carbonTexture(): THREE.Texture {
+  return cached('carbon', () => {
+    const [c, g] = canvas(256, 256);
+    const n = 16;
+    const cell = 256 / n;
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        const over = (i + Math.floor(j / 2)) % 2 === 0;
+        const grad = over ? g.createLinearGradient(i * cell, 0, (i + 1) * cell, 0) : g.createLinearGradient(0, j * cell, 0, (j + 1) * cell);
+        grad.addColorStop(0, '#4a4a4a');
+        grad.addColorStop(0.5, over ? '#9a9a9a' : '#7a7a7a');
+        grad.addColorStop(1, '#4a4a4a');
+        g.fillStyle = grad;
+        g.fillRect(i * cell, j * cell, cell, cell);
+      }
+    }
+    const tex = finish(c, false, true);
+    tex.repeat.set(6, 6);
+    return tex;
+  });
+}

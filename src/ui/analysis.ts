@@ -3,7 +3,7 @@ import type { AppState, Params, Store } from '../app/state';
 import { systemInput } from '../app/system';
 import { IQChart, LineChart, PolarChart } from '../charts/charts';
 import { adcPowerW, adcTrace, idealSnrDb, nyquistOk } from '../models/adc';
-import { arrayMetrics, progressivePhase } from '../models/array-factor';
+import { arrayMetrics, beamFootprint, progressivePhase } from '../models/array-factor';
 import { linkBudget, slantRangeM } from '../models/link-budget';
 import { berTheory, esN0FromEbN0, simulateConstellation, type Modulation } from '../models/modulation';
 import { mosfet, sweepVds, sweepVgs } from '../models/mosfet';
@@ -203,21 +203,27 @@ const arrayPanel: Builder = (store) => {
     { key: 'te', label: 'Taper efficiency', unit: '%' },
     { key: 'gl', label: 'Grating lobes' },
     { key: 'eirp', label: 'EIRP (P/elem × N² × G)', unit: 'dBW' },
+    { key: 'fpAlong', label: '−3 dB footprint, along scan', unit: 'km' },
+    { key: 'fpAcross', label: '−3 dB footprint, across scan', unit: 'km' },
+    { key: 'fpArea', label: 'Footprint area', unit: 'km²' },
   ]);
+  const legend = h('div', 'phase-legend', '<span>Element phase (patch colour)</span><i aria-hidden="true"></i><div><span>0°</span><span>90°</span><span>180°</span><span>270°</span><span>360°</span></div>');
   const eq = eqLine('');
   const polar = new PolarChart(320);
   const cut = new LineChart({ xLabel: 'θ (deg)', yLabel: 'Normalised gain (dB)', height: 160, xDomain: [-90, 90], yDomain: [-50, 2] });
-  sec.body.append(n.el, d.el, st.el, az.el, w.el, ro.el, eq, h('div', 'chart-title', 'Polar cut through the steered beam'), polar.el, cut.el);
+  const fpNote = h('p', 'note', 'Footprint: −3 dB contour of the same pattern on flat ground at the link altitude (COSMOS level). Flat-Earth approximation.');
+  sec.body.append(n.el, d.el, st.el, az.el, w.el, ro.el, fpNote, eq, legend, h('div', 'chart-title', 'Polar cut through the steered beam'), polar.el, cut.el);
   root.append(sec.el);
   const update = (s: AppState, changed: Set<string>) => {
     const q = s.params;
     n.set(q.arrayN); d.set(q.spacingLambda); st.set(q.steerDeg); az.set(q.steerAzDeg); w.set(q.weighting);
-    if (!(changed.has('init') || ['params.arrayN', 'params.spacingLambda', 'params.steerDeg', 'params.steerAzDeg', 'params.weighting', 'params.paOutW'].some((k) => changed.has(k)))) return;
+    if (!(changed.has('init') || ['params.arrayN', 'params.spacingLambda', 'params.steerDeg', 'params.steerAzDeg', 'params.weighting', 'params.paOutW', 'params.altitudeKm'].some((k) => changed.has(k)))) return;
     const ap = { n: q.arrayN, spacingLambda: q.spacingLambda, steerThetaDeg: q.steerDeg, steerPhiDeg: q.steerAzDeg, weighting: q.weighting };
     const m = arrayMetrics(ap);
     const gain = m.directivityDbi + 10 * Math.log10(0.7);
     const eirp = 10 * Math.log10(q.paOutW * q.arrayN * q.arrayN) + gain;
-    ro.set({ d: fx(m.directivityDbi, 1), g: fx(gain, 1), hpbw: fx(m.hpbwDeg, 1), sll: fx(m.sidelobeDb, 1), te: fx(m.taperEfficiency * 100, 0), gl: m.gratingLobe ? '⚠ present (d too large)' : 'none', eirp: fx(eirp, 1) });
+    const fp = beamFootprint(ap, q.altitudeKm);
+    ro.set({ d: fx(m.directivityDbi, 1), g: fx(gain, 1), hpbw: fx(m.hpbwDeg, 1), sll: fx(m.sidelobeDb, 1), te: fx(m.taperEfficiency * 100, 0), gl: m.gratingLobe ? '⚠ present (d too large)' : 'none', eirp: fx(eirp, 1), fpAlong: fx(fp.alongKm, 0), fpAcross: fx(fp.acrossKm, 0), fpArea: fx(fp.areaKm2, 0) });
     const phi = (progressivePhase(q.spacingLambda, q.steerDeg) * 180) / Math.PI;
     eq.innerHTML = `Phase step φ = −k·d·sinθ₀ = −360°·${q.spacingLambda.toFixed(2)}·sin(${q.steerDeg}°) = <b>${phi.toFixed(1)}°</b> per element · grating-lobe limit d/λ < ${(1 / (1 + Math.abs(Math.sin((q.steerDeg * Math.PI) / 180)))).toFixed(2)}`;
     polar.update(m.cut, q.steerDeg);

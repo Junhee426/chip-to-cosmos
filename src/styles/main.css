@@ -374,3 +374,7 @@ body[data-gfx='performance'] .rail, body[data-gfx='performance'] .panel, body[da
   .toast { bottom: 12px; left: 30%; }
   .rail { max-height: calc(100dvh - 64px); }
 }
+
+.phase-legend { margin: 10px 0 4px; font-size: 10.5px; color: var(--text-muted); }
+.phase-legend i { display: block; height: 8px; border-radius: 4px; margin: 4px 0 2px; background: linear-gradient(90deg, #2a6fdb, #29b3c9, #e6edf3, #e0a23a, #c4452f, #2a6fdb); }
+.phase-legend div { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 9.5px; }

@@ -76,6 +76,8 @@ export abstract class BaseLevel {
   private focusDim = new Map<string, number>();
   private levelAlpha = 1;
   private opacityDirty = true;
+  private guides: THREE.LineSegments | null = null;
+  private guideValue = -1;
   mode: EngMode = 'structure';
   /** true when this level is the current, interactive level */
   active = false;
@@ -107,6 +109,32 @@ export abstract class BaseLevel {
     }
     this.setMode(this.mode);
     for (const list of Object.values(this.flows)) list?.forEach((f) => this.root.add(f.group));
+    if (this.explode.objects.length) {
+      const mat = new THREE.LineDashedMaterial({ color: '#9fc6ee', dashSize: this.radius * 0.03, gapSize: this.radius * 0.02, transparent: true, opacity: 0, depthWrite: false });
+      this.guides = new THREE.LineSegments(new THREE.BufferGeometry(), mat);
+      this.guides.userData.noFade = true;
+      this.guides.frustumCulled = false;
+      this.guides.visible = false;
+      this.root.add(this.guides);
+    }
+  }
+
+  /** Dashed assembly guides follow the exploded parts (engineering explode, not decoration). */
+  private updateGuides(): void {
+    const g = this.guides;
+    if (!g) return;
+    const v = this.explode.current;
+    const op = smooth(0.02, 0.25, v) * 0.55 * this.levelAlpha;
+    g.visible = op > 0.01;
+    (g.material as THREE.LineDashedMaterial).opacity = op;
+    if (!g.visible || Math.abs(v - this.guideValue) < 1e-4) return;
+    this.guideValue = v;
+    const pts: number[] = [];
+    this.explode.guideSegments(this.root, pts);
+    g.geometry.dispose();
+    g.geometry = new THREE.BufferGeometry();
+    g.geometry.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+    g.computeLineDistances();
   }
 
   protected addComponent(def: ComponentDef): ComponentDef {
@@ -141,6 +169,9 @@ export abstract class BaseLevel {
   }
 
   protected addFlow(mode: EngMode, flow: FlowPath): FlowPath {
+    // one visual grammar for information: SIGNAL paths carry discrete pulses (packets);
+    // power and heat stay continuous streams
+    if (mode === 'signal') flow.asPulses();
     (this.flows[mode] ??= []).push(flow);
     return flow;
   }
@@ -232,6 +263,7 @@ export abstract class BaseLevel {
       this.cutawayWorld.copy(this.cutawayLocal).applyMatrix4(this.root.matrixWorld);
     }
     for (const list of Object.values(this.flows)) list?.forEach((f) => f.update(dt));
+    this.updateGuides();
     this.tick(dt, state);
   }
 
