@@ -17,6 +17,7 @@ const out = pos[1] ?? 'perf-out';
 const gpu = process.argv.includes('--gpu');
 const onlyArg = process.argv.find((a) => a.startsWith('--only='));
 const only = new Set(onlyArg ? onlyArg.slice(7).split(',') : ['tiers', 'memory', 'mobile', 'devices']);
+const DEVICE_FILTER = process.argv.find((a) => a.startsWith('--device='))?.slice(9).split(',');
 const CYCLES = Number(process.argv.find((a) => a.startsWith('--cycles='))?.slice(9) ?? 10);
 mkdirSync(out, { recursive: true });
 const LEVELS = ['cosmos', 'satellite', 'array', 'payload', 'pcb', 'package', 'die', 'mosfet', 'silicon', 'energy'];
@@ -147,7 +148,7 @@ if (only.has('devices')) {
     ['phone-390', 390, 844, true], ['phone-430', 430, 932, true], ['tablet-768', 768, 1024, true], ['tablet-820', 820, 1180, true],
     ['desktop-1280', 1280, 800, false], ['desktop-1440', 1440, 900, false],
   ];
-  for (const [name, w, h, touch] of sizes) {
+  for (const [name, w, h, touch] of sizes.filter(([n]) => !DEVICE_FILTER || DEVICE_FILTER.includes(n))) {
     for (const orient of touch ? ['portrait', 'landscape'] : ['landscape']) {
       const vw = orient === 'portrait' ? w : Math.max(w, h);
       const vh = orient === 'portrait' ? h : Math.min(w, h);

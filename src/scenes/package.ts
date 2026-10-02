@@ -96,8 +96,10 @@ export class PackageLevel extends BaseLevel {
     r.add(ring);
     this.addComponent({ id: 'lid', name: 'Package Lid', sub: 'Stiffener ring', object: ring, labelLocal: v3(-6.5, 1.1, -6), desc: 'Lid skirt / stiffener bonded to the substrate: limits warpage and supports the heat spreader.', specs: ['Ni-plated Cu', 'Adhesive seal'] });
 
+    // brushed Ni-plated copper: lighter and slightly glossier so it reads as metal, not a dark slab
     const ihsMat = mat.nickel();
-    ihsMat.roughness = 0.5;
+    ihsMat.color.set(0xcdd1d6);
+    ihsMat.roughness = 0.34;
     const ihs = group(box(13, 0.3, 13, ihsMat, [0, DIE_TOP + 0.19, 0], 0.08));
     r.add(ihs);
     this.addComponent({ id: 'ihs', name: 'Heat Spreader', sub: 'Integrated (IHS)', object: ihs, labelLocal: v3(-3, DIE_TOP + 0.34, 6.5), desc: 'Integrated heat spreader distributing die hot-spots over a large area before the payload cold plate.', specs: ['Cu, k ≈ 390 W/m·K', 'Ni plating'] });

@@ -134,3 +134,30 @@ PMREM environment are released when regenerated.
 Worst frame per cycle ≈ 14–17 s under SwiftShader. It is the first visit to a non-resident level
 (build + shader pre-compile on the main thread before the flight starts). Real GPUs compile far
 faster, but level construction is still synchronous — next step if real-device traces show it.
+
+## Device layouts — Chromium emulation (not real devices)
+
+`node scripts/perf.mjs <url> <out> --only=devices`. Viewport + touch emulation in headless
+Chromium; these are layout/interaction checks, **not** iPhone/iPad/Surface measurements.
+`small` = interactive elements under 44 px on coarse pointers (24 px desktop); `overlaps` =
+intersecting HUD controls; journey = expand sheet → select from parts list → selection visible →
+Inside → Back → Experiment.
+
+| Device | Orientation | Layout | Panel | Free area | small | overlaps | Journey |
+|---|---|---|---|---|---|---|---|
+| phone-390 | portrait 390×844 | mobile | bottom sheet | 77 % | 0 | 0 | pass |
+| phone-390 | landscape 844×390 | mobile | right dock | 57 % | 0 | 0 | pass |
+| phone-430 | portrait 430×932 | mobile | bottom sheet | 79 % | 0 | 0 | pass |
+| phone-430 | landscape 932×430 | mobile | right dock | 61 % | 0 | 0 | pass |
+| tablet-768 | portrait 768×1024 | mobile | bottom sheet | 81 % | 0 | 0 | pass |
+| tablet-768 | landscape 1024×768 | desktop | side panel | 62 % | 0 | 0 | — |
+| tablet-820 | portrait 820×1180 | mobile | bottom sheet | 83 % | 0 | 0 | pass |
+| tablet-820 | landscape 1180×820 | desktop | side panel | 67 % | 0 | 0 | — |
+| desktop-1280 | 1280×800 | desktop | side panel | 69 % | 0 | 0 | — |
+| desktop-1440 | 1440×900 | desktop | side panel | 73 % | 0 | 0 | — |
+
+The first run found tablet landscape (touch + desktop layout) failing: coupling pills overflowed the
+narrow middle strip (6 / 5 overlaps) and `.part` buttons were under 44 px. Fixed in `src/ui/hud.ts`
+(`placeCoupling()` docks the strip into the inspector when the free middle width is < 620 px) and
+`src/styles/main.css` (coarse pointer: hide the mouse hint, `.part` min-width 44 px); the rows above
+are the re-run after the fix (tablets and desktops re-measured).

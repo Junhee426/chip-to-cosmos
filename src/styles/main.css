@@ -378,3 +378,13 @@ body[data-gfx='performance'] .rail, body[data-gfx='performance'] .panel, body[da
 .phase-legend { margin: 10px 0 4px; font-size: 10.5px; color: var(--text-muted); }
 .phase-legend i { display: block; height: 8px; border-radius: 4px; margin: 4px 0 2px; background: linear-gradient(90deg, #2a6fdb, #29b3c9, #e6edf3, #e0a23a, #c4452f, #2a6fdb); }
 .phase-legend div { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 9.5px; }
+
+/* coupling strip docked inside the panel (narrow desktop / touch tablet landscape) */
+.hud.coupling-in-panel .panel .coupling { position: static; margin-top: 14px; }
+.hud.coupling-in-panel .panel .chain { flex-wrap: wrap; white-space: normal; }
+.hud.coupling-in-panel .panel .chain-name { flex-basis: 100%; }
+.hud.coupling-in-panel .hint { display: none; }
+@media (pointer: coarse) {
+  .hint { display: none; } /* mouse instructions (double-click, Esc) do not apply to touch */
+  .part { min-width: 44px; }
+}

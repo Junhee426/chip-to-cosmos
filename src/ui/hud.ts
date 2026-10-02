@@ -195,6 +195,7 @@ export class Hud {
     const mq = window.matchMedia(MOBILE_LAYOUT_QUERY);
     const place = () => this.placeForViewport(mq.matches);
     mq.addEventListener('change', place);
+    addEventListener('resize', () => this.placeCoupling());
     place();
     this.buildLadder();
     store.subscribe((s, c) => this.onState(s, c));
@@ -363,15 +364,29 @@ export class Hud {
   private placeForViewport(mobile: boolean): void {
     this.mobile = mobile;
     this.root.classList.toggle('is-mobile', mobile);
-    if (mobile) {
-      this.rail.append(this.tools);
-      this.panel.append(this.coupling);
-    } else {
+    if (mobile) this.rail.append(this.tools);
+    else {
       this.top.insertBefore(this.tools, this.top.lastElementChild);
-      this.root.append(this.coupling);
       this.setSheet(false);
     }
+    this.placeCoupling();
     this.cb.layout();
+  }
+
+  /**
+   * The coupling chain needs ~620 px. When the strip between rail and panel is
+   * narrower (mobile, touch tablets in landscape, small windows), it moves into
+   * the panel instead of scrolling its pills out of sight.
+   */
+  private placeCoupling(): void {
+    const free = innerWidth - this.rail.getBoundingClientRect().right - (innerWidth - this.panel.getBoundingClientRect().left);
+    const inPanel = this.mobile || free < 620;
+    const target = inPanel ? this.panel : this.root;
+    if (this.coupling.parentElement !== target) {
+      target.append(this.coupling);
+      this.root.classList.toggle('coupling-in-panel', inPanel);
+      this.cb.layout();
+    }
   }
 
   get isMobile(): boolean {
@@ -443,7 +458,8 @@ export class Hud {
     }
     const rail = this.rail.getBoundingClientRect();
     const coupling = this.coupling.getBoundingClientRect();
-    return { top: Math.max(top.bottom, 64) + 8, right: W - panel.left + 12, bottom: H - coupling.top + 12, left: rail.right + 12 };
+    const bottom = this.coupling.parentElement === this.panel ? 24 : H - coupling.top + 12;
+    return { top: Math.max(top.bottom, 64) + 8, right: W - panel.left + 12, bottom, left: rail.right + 12 };
   }
 
   /** Update the scale bar from the metres currently spanned by the viewport. */
