@@ -44,3 +44,30 @@ describe('array factor', () => {
     expect(arrayMetrics({ n: 8, spacingLambda: 0.5, steerThetaDeg: 45, steerPhiDeg: 0, weighting: 'uniform' }).gratingLobe).toBe(false);
   });
 });
+
+import { beamFootprint } from '../src/models/array-factor';
+
+describe('beam footprint (−3 dB, flat-Earth)', () => {
+  const base = { n: 16, spacingLambda: 0.5, steerThetaDeg: 0, steerPhiDeg: 0, weighting: 'uniform' as const };
+  it('broadside: a near-circle of diameter 2·h·tan(HPBW/2)', () => {
+    const m = arrayMetrics(base);
+    const f = beamFootprint(base, 550);
+    const expected = 2 * 550 * Math.tan(((m.hpbwDeg / 2) * Math.PI) / 180);
+    expect(f.alongKm).toBeGreaterThan(expected * 0.9);
+    expect(f.alongKm).toBeLessThan(expected * 1.1);
+    expect(f.acrossKm / f.alongKm).toBeGreaterThan(0.9);
+    expect(Math.hypot(...f.centerKm)).toBeLessThan(1e-6);
+  });
+  it('steering moves the footprint and stretches it along the scan plane', () => {
+    const f0 = beamFootprint(base, 550);
+    const f = beamFootprint({ ...base, steerThetaDeg: 40 }, 550);
+    expect(f.centerKm[0]).toBeCloseTo(550 * Math.tan((40 * Math.PI) / 180), 3);
+    expect(f.alongKm).toBeGreaterThan(f0.alongKm * 1.5);
+    expect(f.areaKm2).toBeGreaterThan(f0.areaKm2);
+  });
+  it('more elements → smaller footprint; higher orbit → larger footprint', () => {
+    const a = beamFootprint(base, 550);
+    expect(beamFootprint({ ...base, n: 32 }, 550).areaKm2).toBeLessThan(a.areaKm2 / 3);
+    expect(beamFootprint(base, 1100).alongKm).toBeCloseTo(a.alongKm * 2, 0);
+  });
+});

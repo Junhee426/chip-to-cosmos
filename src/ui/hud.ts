@@ -1,6 +1,7 @@
 import { LEVELS, MAIN_CHAIN, breadcrumb, depth, formatLength, type LevelId } from '../app/navigation';
 import type { AppState, EngMode, Quality, Store } from '../app/state';
 import { LEVEL_KEY_PARAM } from './summary';
+import { MOBILE_LAYOUT_QUERY } from '../app/quality';
 import { systemInput } from '../app/system';
 import { THEORY } from '../content/theory';
 import type { ModelMeta } from '../models/meta';
@@ -17,6 +18,8 @@ export interface HudCallbacks {
   layout: () => void;
   replayIntro: () => void;
   componentInfo: (id: string) => ComponentDef | null;
+  /** components of the current level (for the keyboard/touch-reachable parts list) */
+  components: () => ComponentDef[];
 }
 
 const MODES: { id: EngMode; label: string; key: string }[] = [
@@ -50,6 +53,8 @@ export class Hud {
   private scaleTag: HTMLElement;
   private coupling: HTMLElement;
   private couplingKey = '';
+  private couplingPrev = new Map<string, number>();
+  private parts!: HTMLElement;
   readonly fps: HTMLElement;
   readonly perf: HTMLElement;
   private panel!: HTMLElement;
@@ -78,6 +83,7 @@ export class Hud {
     for (const [v, l] of [['auto', 'Auto'], ['high', 'High'], ['balanced', 'Balanced'], ['performance', 'Performance']]) this.quality.append(new Option(`Quality · ${l}`, v));
     this.quality.addEventListener('change', () => store.set({ quality: this.quality.value as Quality }));
     this.labelsBtn = h('button', 'tool-btn', 'Labels');
+    this.labelsBtn.setAttribute('aria-pressed', 'true');
     this.labelsBtn.addEventListener('click', () => store.set({ labels: !store.get().labels }));
     const intro = h('button', 'tool-btn', '▶ Intro');
     intro.addEventListener('click', () => cb.replayIntro());
@@ -90,6 +96,7 @@ export class Hud {
     const menu = h('button', 'icon-btn nav-menu', '⋯');
     menu.setAttribute('aria-label', 'Menu: scale, modes, view, quality');
     menu.setAttribute('aria-expanded', 'false');
+    menu.setAttribute('aria-controls', 'c2c-menu');
     menu.addEventListener('click', () => {
       const open = !this.root.classList.contains('menu-open');
       this.root.classList.toggle('menu-open', open);
@@ -101,6 +108,8 @@ export class Hud {
 
     // --- left rail ---
     const rail = h('aside', 'rail');
+    rail.id = 'c2c-menu';
+    rail.setAttribute('aria-label', 'Scale, engineering mode and view');
     this.rail = rail;
     rail.append(h('div', 'rail-title', 'SCALE'));
     this.ladder = h('ol', 'ladder');
@@ -108,7 +117,9 @@ export class Hud {
     rail.append(h('div', 'rail-title', 'ENGINEERING MODE'));
     const modes = h('div', 'modes');
     for (const m of MODES) {
-      const b = h('button', `mode mode-${m.id}`, `<i></i>${m.label}<kbd>${m.key}</kbd>`);
+      const b = h('button', `mode mode-${m.id}`, `<i aria-hidden="true"></i>${m.label}<kbd aria-hidden="true">${m.key}</kbd>`);
+      b.setAttribute('aria-pressed', 'false');
+      b.setAttribute('aria-keyshortcuts', m.key);
       b.addEventListener('click', () => store.set({ mode: m.id }));
       this.modeBtns.set(m.id, b);
       modes.append(b);
@@ -128,30 +139,42 @@ export class Hud {
     this.explode.addEventListener('input', () => store.set({ explode: Number(this.explode.value) }));
     ex.append(exHead, this.explode);
     this.cutaway = h('button', 'tool-btn wide', 'Cutaway');
+    this.cutaway.setAttribute('aria-pressed', 'false');
     this.cutaway.addEventListener('click', () => store.set({ cutaway: !store.get().cutaway }));
     rail.append(ex, this.cutaway);
 
     // --- right panel ---
     const panel = h('aside', 'panel');
     panel.setAttribute('aria-label', 'Selected part and level information');
+    panel.id = 'c2c-inspector';
     this.panel = panel;
     this.sheetHandle = h('button', 'sheet-handle', '<span></span>');
     this.sheetHandle.setAttribute('aria-label', 'Expand details');
     this.sheetHandle.setAttribute('aria-expanded', 'false');
+    this.sheetHandle.setAttribute('aria-controls', 'c2c-inspector');
     this.sheetHandle.addEventListener('click', () => this.setSheet(!this.sheetExpanded));
     this.summary = h('div', 'sheet-summary');
     this.panelHead = h('div', 'panel-head');
     this.info = h('div', 'info');
     this.tabs = h('div', 'tabs');
+    this.tabs.setAttribute('role', 'tablist');
+    this.tabs.setAttribute('aria-label', 'Explanation depth');
     for (const t of ['intuition', 'engineering', 'theory'] as const) {
       const b = h('button', 'tab', t.toUpperCase());
       b.dataset.tab = t;
+      b.id = `c2c-tab-${t}`;
+      b.setAttribute('role', 'tab');
+      b.setAttribute('aria-controls', 'c2c-tabpanel');
       b.addEventListener('click', () => store.set({ theoryTab: t }));
       this.tabs.append(b);
     }
     this.tabBody = h('div', 'tab-body');
+    this.tabBody.id = 'c2c-tabpanel';
+    this.tabBody.setAttribute('role', 'tabpanel');
+    this.parts = h('nav', 'parts');
+    this.parts.setAttribute('aria-label', 'Parts at this scale');
     this.analysisHost = h('div', 'analysis');
-    panel.append(this.sheetHandle, this.summary, this.panelHead, this.info, this.tabs, this.tabBody, this.analysisHost);
+    panel.append(this.sheetHandle, this.summary, this.panelHead, this.info, this.parts, this.tabs, this.tabBody, this.analysisHost);
 
     // --- bottom: scale bar + coupling ---
     const scale = h('div', 'scale');
@@ -169,9 +192,10 @@ export class Hud {
     this.root.append(top, rail, panel, scale, this.coupling, hint, this.perf, this.toastEl);
     const ro = new ResizeObserver(() => cb.layout());
     for (const el of [top, rail, panel, this.coupling]) ro.observe(el);
-    const mq = window.matchMedia('(max-width: 900px)');
+    const mq = window.matchMedia(MOBILE_LAYOUT_QUERY);
     const place = () => this.placeForViewport(mq.matches);
     mq.addEventListener('change', place);
+    addEventListener('resize', () => this.placeCoupling());
     place();
     this.buildLadder();
     store.subscribe((s, c) => this.onState(s, c));
@@ -184,8 +208,10 @@ export class Hud {
       const li = h('li', 'rung');
       li.dataset.level = id;
       if (id === 'array') li.classList.add('branch');
-      li.innerHTML = `<span class="rung-dot"></span><span class="rung-name">${LEVELS[id].crumb}</span><span class="rung-scale">${rungScale(id)}</span>`;
-      li.addEventListener('click', () => this.cb.navigate(id));
+      const b = h('button', 'rung-btn', `<span class="rung-dot" aria-hidden="true"></span><span class="rung-name">${LEVELS[id].crumb}</span><span class="rung-scale">${rungScale(id)}</span>`);
+      b.setAttribute('aria-label', `${LEVELS[id].title} (${rungScale(id)})`);
+      b.addEventListener('click', () => this.cb.navigate(id));
+      li.append(b);
       this.ladder.append(li);
     }
   }
@@ -201,20 +227,32 @@ export class Hud {
       });
       for (const li of this.ladder.querySelectorAll<HTMLElement>('.rung')) {
         li.classList.toggle('current', li.dataset.level === s.level);
+        li.querySelector('button')?.toggleAttribute('aria-current', li.dataset.level === s.level);
       }
       this.root.classList.toggle('transitioning', s.transitioning);
     }
     if (c.has('level')) this.buildPanel(s);
-    if (c.has('mode')) for (const [m, b] of this.modeBtns) b.classList.toggle('on', m === s.mode);
+    if (c.has('mode'))
+      for (const [m, b] of this.modeBtns) {
+        b.classList.toggle('on', m === s.mode);
+        b.setAttribute('aria-pressed', String(m === s.mode));
+      }
     if (c.has('explode')) {
       this.explode.value = String(s.explode);
       this.explodeVal.textContent = `${Math.round(s.explode * 100)} %`;
     }
-    if (c.has('cutaway')) this.cutaway.classList.toggle('on', s.cutaway);
-    if (c.has('labels')) this.labelsBtn.classList.toggle('on', s.labels);
+    if (c.has('cutaway')) {
+      this.cutaway.classList.toggle('on', s.cutaway);
+      this.cutaway.setAttribute('aria-pressed', String(s.cutaway));
+    }
+    if (c.has('labels')) {
+      this.labelsBtn.classList.toggle('on', s.labels);
+      this.labelsBtn.setAttribute('aria-pressed', String(s.labels));
+    }
     if (c.has('quality')) this.quality.value = s.quality;
     if (c.has('theoryTab') || c.has('level')) this.renderTab(s);
     if (c.has('selected') || c.has('level')) this.renderInfo(s);
+    if (c.has('selected') || c.has('level')) this.renderParts(s);
     if (c.has('selected') || c.has('level') || c.has('params')) this.renderSummary(s);
     if (c.has('level')) this.root.classList.remove('menu-open');
     if (this.analysis && (c.has('params') || c.has('init'))) this.analysis.update(s, c);
@@ -235,7 +273,13 @@ export class Hud {
 
   private renderTab(s: AppState): void {
     const t = THEORY[s.level];
-    for (const b of this.tabs.querySelectorAll<HTMLElement>('.tab')) b.classList.toggle('on', b.dataset.tab === s.theoryTab);
+    for (const b of this.tabs.querySelectorAll<HTMLElement>('.tab')) {
+      const on = b.dataset.tab === s.theoryTab;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-selected', String(on));
+      b.tabIndex = on ? 0 : -1;
+      if (on) this.tabBody.setAttribute('aria-labelledby', b.id);
+    }
     if (s.theoryTab === 'intuition') this.tabBody.innerHTML = t.intuition.map((p) => `<p>${p}</p>`).join('');
     else if (s.theoryTab === 'engineering') this.tabBody.innerHTML = t.engineering.map((p) => `<p>${p}</p>`).join('');
     else this.tabBody.innerHTML = (t.models.length ? t.models.map(metaHtml).join('') : '<p class="muted">No calculated model at this level — see the linked levels.</p>') + (t.illustrative.length ? `<div class="illus"><b>Illustrative in this view:</b><ul>${t.illustrative.map((x) => `<li>${x}</li>`).join('')}</ul></div>` : '');
@@ -260,30 +304,55 @@ export class Hud {
     this.info.querySelector('.enter-btn')?.addEventListener('click', () => this.cb.navigate(c.child!));
   }
 
+  /** Every part is reachable without the canvas: keyboard, screen readers, and small screens with few callouts. */
+  private renderParts(s: AppState): void {
+    const list = this.cb.components();
+    if (!list.length) {
+      this.parts.innerHTML = '';
+      return;
+    }
+    this.parts.innerHTML = `<div class="parts-title">PARTS AT THIS SCALE</div><div class="parts-list">${list
+      .map((c) => `<button class="part${c.id === s.selected ? ' on' : ''}" data-id="${c.id}" aria-pressed="${c.id === s.selected}">${c.name}${c.child ? ' <span aria-hidden="true">›</span>' : ''}</button>`)
+      .join('')}</div>`;
+    for (const b of this.parts.querySelectorAll<HTMLElement>('.part')) b.addEventListener('click', () => this.store.set({ selected: b.dataset.id === this.store.get().selected ? null : b.dataset.id! }));
+  }
+
   private renderCoupling(s: AppState): void {
     const p = s.params;
     const key = JSON.stringify(p);
     if (key === this.couplingKey) return;
     this.couplingKey = key;
     const sys = evaluateSystem(systemInput(p));
-    const pill = (label: string, value: string, go?: LevelId) => `<button class="pill"${go ? ` data-go="${go}"` : ''}><span>${label}</span><b>${value}</b></button>`;
+    // what changed since the last parameter edit, and in which direction (calculated values only)
+    const prev = this.couplingPrev;
+    const next = new Map<string, number>();
+    const pill = (label: string, value: string, go: LevelId | undefined, num: number, why: string) => {
+      next.set(label, num);
+      const before = prev.get(label);
+      const d = before === undefined ? 0 : num - before;
+      const rel = before ? Math.abs(d / before) : 0;
+      const cls = before !== undefined && rel > 1e-6 ? (d > 0 ? ' changed up' : ' changed down') : '';
+      const delta = cls ? `<em aria-hidden="true">${d > 0 ? '▲' : '▼'}</em>` : '';
+      return `<button class="pill${cls}"${go ? ` data-go="${go}"` : ''} title="${why}" aria-label="${label} ${value}${cls ? (d > 0 ? ', increased' : ', decreased') : ''}. ${why}"><span>${label}</span><b>${value}${delta}</b></button>`;
+    };
     const arrow = '<span class="pill-arrow">→</span>';
     this.coupling.innerHTML = `
       <div class="chain"><span class="chain-name">CHIP → HEAT</span>${[
-        pill('ADC', `${p.adcBits} bit · ${p.adcFsMsps} MS/s`, 'payload'),
-        pill('SNRq', `${fx(sys.quantSnrDb, 1)} dB`),
-        pill('ADC+DSP', `${fx(sys.adcPowerW + sys.dspPowerW, 0)} W`, 'die'),
-        pill('Payload DC', `${fx(sys.payloadDcW, 0)} W`, 'satellite'),
-        pill('Heat', `${fx(sys.heatW, 0)} W`),
-        pill('Radiator', `${fx(sys.radiatorM2, 2)} m²`, 'satellite'),
+        pill('ADC', `${p.adcBits} bit · ${p.adcFsMsps} MS/s`, 'payload', p.adcBits * 1e4 + p.adcFsMsps, 'Converter resolution and sample rate (input)'),
+        pill('SNRq', `${fx(sys.quantSnrDb, 1)} dB`, undefined, sys.quantSnrDb, 'Quantisation SNR = 6.02·N + 1.76 dB'),
+        pill('ADC+DSP', `${fx(sys.adcPowerW + sys.dspPowerW, 0)} W`, 'die', sys.adcPowerW + sys.dspPowerW, 'ADC ∝ 2^ENOB·fs (Walden FOM); DSP ∝ N·fs'),
+        pill('Payload DC', `${fx(sys.payloadDcW, 0)} W`, 'satellite', sys.payloadDcW, 'ADC + DSP + PA DC (Pout/PAE) + LO/LNA'),
+        pill('Heat', `${fx(sys.heatW, 0)} W`, undefined, sys.heatW, 'Q = P_DC − P_RF radiated'),
+        pill('Radiator', `${fx(sys.radiatorM2, 2)} m²`, 'satellite', sys.radiatorM2, 'A = Q / (εσ(T⁴ − T_sink⁴))'),
       ].join(arrow)}</div>
       <div class="chain"><span class="chain-name">BEAM → LINK</span>${[
-        pill('Array', `${p.arrayN}×${p.arrayN} · ${p.steerDeg}°`, 'array'),
-        pill('Gain', `${fx(sys.gainDbi, 1)} dBi`),
-        pill('EIRP', `${fx(sys.eirpDbw, 1)} dBW`),
-        pill('Pr', `${fx(sys.link.rxPowerDbm, 1)} dBm`, 'cosmos'),
-        pill('Margin', `${sys.link.marginDb >= 0 ? '+' : ''}${fx(sys.link.marginDb, 1)} dB`, 'cosmos'),
+        pill('Array', `${p.arrayN}×${p.arrayN} · ${p.steerDeg}°`, 'array', p.arrayN * 1e3 + p.steerDeg + p.spacingLambda, 'Elements, spacing, steering and taper (input)'),
+        pill('Gain', `${fx(sys.gainDbi, 1)} dBi`, undefined, sys.gainDbi, 'Directivity integrated from |AF·EP|² × 70 % efficiency'),
+        pill('EIRP', `${fx(sys.eirpDbw, 1)} dBW`, undefined, sys.eirpDbw, 'EIRP = Pt + Gt'),
+        pill('Pr', `${fx(sys.link.rxPowerDbm, 1)} dBm`, 'cosmos', sys.link.rxPowerDbm, 'Pr = EIRP + Gr − FSPL − L'),
+        pill('Margin', `${sys.link.marginDb >= 0 ? '+' : ''}${fx(sys.link.marginDb, 1)} dB`, 'cosmos', sys.link.marginDb, 'Eb/N0 − required Eb/N0'),
       ].join(arrow)}</div>`;
+    this.couplingPrev = next;
     this.coupling.classList.toggle('neg', sys.link.marginDb < 0 || sys.powerMarginW < 0);
     for (const b of this.coupling.querySelectorAll<HTMLElement>('[data-go]')) b.addEventListener('click', () => this.cb.navigate(b.dataset.go as LevelId));
     this.coupling.classList.remove('flash');
@@ -295,15 +364,29 @@ export class Hud {
   private placeForViewport(mobile: boolean): void {
     this.mobile = mobile;
     this.root.classList.toggle('is-mobile', mobile);
-    if (mobile) {
-      this.rail.append(this.tools);
-      this.panel.append(this.coupling);
-    } else {
+    if (mobile) this.rail.append(this.tools);
+    else {
       this.top.insertBefore(this.tools, this.top.lastElementChild);
-      this.root.append(this.coupling);
       this.setSheet(false);
     }
+    this.placeCoupling();
     this.cb.layout();
+  }
+
+  /**
+   * The coupling chain needs ~620 px. When the strip between rail and panel is
+   * narrower (mobile, touch tablets in landscape, small windows), it moves into
+   * the panel instead of scrolling its pills out of sight.
+   */
+  private placeCoupling(): void {
+    const free = innerWidth - this.rail.getBoundingClientRect().right - (innerWidth - this.panel.getBoundingClientRect().left);
+    const inPanel = this.mobile || free < 620;
+    const target = inPanel ? this.panel : this.root;
+    if (this.coupling.parentElement !== target) {
+      target.append(this.coupling);
+      this.root.classList.toggle('coupling-in-panel', inPanel);
+      this.cb.layout();
+    }
   }
 
   get isMobile(): boolean {
@@ -368,10 +451,15 @@ export class Hud {
     const H = window.innerHeight;
     const top = this.top.getBoundingClientRect();
     const panel = this.panel.getBoundingClientRect();
-    if (this.mobile) return { top: top.bottom + 8, right: 12, bottom: H - panel.top + 8, left: 12 };
+    if (this.mobile) {
+      // landscape phones: the sheet docks to the right edge instead of covering the bottom
+      const side = panel.height > H * 0.6 && panel.left > W * 0.3;
+      return side ? { top: top.bottom + 8, right: W - panel.left + 8, bottom: 12, left: 12 } : { top: top.bottom + 8, right: 12, bottom: H - panel.top + 8, left: 12 };
+    }
     const rail = this.rail.getBoundingClientRect();
     const coupling = this.coupling.getBoundingClientRect();
-    return { top: Math.max(top.bottom, 64) + 8, right: W - panel.left + 12, bottom: H - coupling.top + 12, left: rail.right + 12 };
+    const bottom = this.coupling.parentElement === this.panel ? 24 : H - coupling.top + 12;
+    return { top: Math.max(top.bottom, 64) + 8, right: W - panel.left + 12, bottom, left: rail.right + 12 };
   }
 
   /** Update the scale bar from the metres currently spanned by the viewport. */

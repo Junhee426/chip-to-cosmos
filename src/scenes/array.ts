@@ -3,7 +3,7 @@ import type { AppState } from '../app/state';
 import { COLORS, mat } from '../graphics/materials';
 import { box, group, v3 } from '../graphics/geometry';
 import { magnitudeColor, phaseColor } from '../graphics/effects';
-import { elementPattern, planarAF, progressivePhase, weights, type ArrayParams } from '../models/array-factor';
+import { beamFootprint, elementPattern, planarAF, progressivePhase, weights, type ArrayParams } from '../models/array-factor';
 import { wavelengthM } from '../models/units';
 import { BaseLevel } from './base';
 
@@ -11,6 +11,9 @@ const DR = 30; // dynamic range shown on the 3D radiation surface (dB)
 const R_MAX = 11; // radius of the 0 dB point (scene units)
 const NT = 72;
 const NP = 144;
+/** ground plane height in the lab (directions are projected exactly; the distance is not to scale) */
+const GROUND_Y = 14;
+const MAX_WAVES = 12;
 
 /**
  * BEAM LAB — planar phased array (units: cm). The 3D radiation surface is
@@ -20,7 +23,7 @@ const NP = 144;
 export class ArrayLevel extends BaseLevel {
   readonly id = 'array' as const;
   readonly radius = 6;
-  home = { pos: v3(16, 13, 22), target: v3(0, 4, 0) };
+  home = { pos: v3(27, 9, 31), target: v3(0, 6.5, 0) };
   private panel = new THREE.Group();
   private patches: THREE.InstancedMesh | null = null;
   private surface!: THREE.Mesh;
@@ -31,6 +34,11 @@ export class ArrayLevel extends BaseLevel {
   private sideLabel = new THREE.Object3D();
   private panelSize = 12;
   private key = '';
+  private lambdaCm = 1.52;
+  private footFill!: THREE.Mesh;
+  private footLine!: THREE.LineLoop;
+  private footEdges!: THREE.LineSegments;
+  private footLabel = new THREE.Object3D();
 
   build(): void {
     this.root.add(this.panel);
@@ -63,10 +71,25 @@ export class ArrayLevel extends BaseLevel {
     // container object so the pattern participates in fading
     this.addComponent({ id: 'pattern', name: 'Radiation Surface', object: pattern, desc: '', label: false });
 
-    // wavefronts
+    // Earth footprint: the calculated −3 dB contour projected onto a ground plane
+    const ground = new THREE.Mesh(new THREE.CircleGeometry(26, 96), new THREE.MeshBasicMaterial({ color: '#1b3a5c', transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false }));
+    ground.rotation.x = Math.PI / 2;
+    ground.position.y = GROUND_Y;
+    const grid = new THREE.PolarGridHelper(26, 12, 6, 96, '#3d6a96', '#2a4d70');
+    grid.position.y = GROUND_Y - 0.01;
+    (grid.material as THREE.Material).transparent = true;
+    (grid.material as THREE.Material).opacity = 0.35;
+    this.footFill = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color: COLORS.signal, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false }));
+    this.footLine = new THREE.LineLoop(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: '#cfe9ff' }));
+    this.footEdges = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: COLORS.signal, transparent: true, opacity: 0.45 }));
+    const footprint = group(ground, grid, this.footFill, this.footLine, this.footEdges, this.footLabel);
+    this.root.add(footprint);
+    this.addComponent({ id: 'footprint', name: 'Earth Footprint', sub: '−3 dB contour · calculated', object: this.footLabel, desc: 'Where the beam lands: the −3 dB contour of the same |AF·EP| pattern, intersected with the ground at the orbit altitude (flat-Earth approximation). Lines from the array trace the beam edge. Distance is compressed for display; shape and position are exact projections.', specs: ['Calculated from array state', 'Flat-Earth, altitude from link settings'], essential: true });
+
+    // wavefronts: plane fronts normal to the beam, spaced by one wavelength (1 unit = 1 cm)
     const wmat = () => new THREE.MeshBasicMaterial({ color: COLORS.signal, transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending });
     const waves = new THREE.Group();
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < MAX_WAVES; i++) {
       const w = new THREE.Mesh(new THREE.RingGeometry(0.94, 1, 96), wmat());
       this.waves.push(w);
       waves.add(w);
@@ -77,7 +100,7 @@ export class ArrayLevel extends BaseLevel {
   }
 
   onState(state: AppState, changed: Set<string>): void {
-    if (['params.arrayN', 'params.spacingLambda', 'params.steerDeg', 'params.steerAzDeg', 'params.weighting', 'params.freqGHz'].some((k) => changed.has(k))) this.applyParams(state);
+    if (['params.arrayN', 'params.spacingLambda', 'params.steerDeg', 'params.steerAzDeg', 'params.weighting', 'params.freqGHz', 'params.altitudeKm'].some((k) => changed.has(k))) this.applyParams(state);
   }
 
   private params(state: AppState): ArrayParams {
@@ -88,6 +111,7 @@ export class ArrayLevel extends BaseLevel {
   private applyParams(state: AppState): void {
     const ap = this.params(state);
     const lambdaCm = wavelengthM(state.params.freqGHz * 1e9) * 100;
+    this.lambdaCm = lambdaCm;
     const d = ap.spacingLambda * lambdaCm;
     const w = weights(ap.n, ap.weighting);
     const key = `${ap.n}|${d.toFixed(4)}`;
@@ -154,20 +178,44 @@ export class ArrayLevel extends BaseLevel {
     this.beamLabel.position.copy(mainDir).multiplyScalar(R_MAX * 1.02);
     const sideR = R_MAX * Math.max(0.05, (side.db + DR) / DR);
     this.sideLabel.position.copy(side.dir).multiplyScalar(sideR);
+    this.updateFootprint(ap, state.params.altitudeKm);
     this.markOpacityDirty();
+  }
+
+  /** Same array state → footprint on the ground plane (directions projected exactly). */
+  private updateFootprint(ap: ArrayParams, altitudeKm: number): void {
+    const f = beamFootprint(ap, altitudeKm, 96);
+    const pts = f.directions.filter((d) => d[1] > 0.05).map((d) => new THREE.Vector3((d[0] / d[1]) * GROUND_Y, GROUND_Y - 0.02, (d[2] / d[1]) * GROUND_Y));
+    if (pts.length < 3) return;
+    this.footLine.geometry.dispose();
+    this.footLine.geometry = new THREE.BufferGeometry().setFromPoints(pts);
+    const c = pts.reduce((a, b) => a.add(b), new THREE.Vector3()).divideScalar(pts.length);
+    const fan: THREE.Vector3[] = [];
+    pts.forEach((p, i) => fan.push(c, p, pts[(i + 1) % pts.length]));
+    this.footFill.geometry.dispose();
+    this.footFill.geometry = new THREE.BufferGeometry().setFromPoints(fan);
+    const edges: THREE.Vector3[] = [];
+    for (let k = 0; k < 4; k++) edges.push(new THREE.Vector3(), pts[Math.floor((k * pts.length) / 4)]);
+    this.footEdges.geometry.dispose();
+    this.footEdges.geometry = new THREE.BufferGeometry().setFromPoints(edges);
+    this.footLabel.position.copy(c);
   }
 
   protected tick(dt: number): void {
     // wavefronts travel along the beam axis; spacing = λ (scaled for display)
     const q = new THREE.Quaternion().setFromUnitVectors(v3(0, 0, 1), this.beamAxis);
+    // fronts advance one wavelength per cycle (speed illustrative), spacing = λ
+    const n = Math.min(MAX_WAVES, Math.max(3, Math.floor(14 / this.lambdaCm)));
     this.waves.forEach((w, i) => {
-      const s = ((this.time * 0.35 + i / this.waves.length) % 1);
-      const dist = 1 + s * 14;
+      w.visible = i < n;
+      if (i >= n) return;
+      const s = (this.time * 0.25 + i / n) % 1;
+      const dist = 1 + s * n * this.lambdaCm;
       w.position.copy(this.beamAxis).multiplyScalar(dist);
       w.quaternion.copy(q);
-      const rad = this.panelSize * 0.45 + dist * 0.05;
+      const rad = this.panelSize * 0.3 + dist * 0.04;
       w.scale.setScalar(rad);
-      (w.material as THREE.MeshBasicMaterial).opacity = 0.32 * Math.sin(Math.PI * s) * (1 - s) * this.alpha;
+      (w.material as THREE.MeshBasicMaterial).opacity = 0.16 * Math.sin(Math.PI * s) * (1 - s) * this.alpha;
     });
     void dt;
   }

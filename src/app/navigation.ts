@@ -108,3 +108,45 @@ export function formatLength(m: number): string {
   }
   return `${(m / 1e-10).toFixed(2)} Å`;
 }
+
+/**
+ * Structural validation of the level graph. Returns a list of problems (empty = valid):
+ * exactly one root, all parents exist, no cycles, every node reaches the root,
+ * MAIN_CHAIN is a parent→child path from the root, side branches hang off the chain.
+ */
+export function validateLevelGraph(levels: Record<string, { id: string; parent: string | null }> = LEVELS, mainChain: readonly string[] = MAIN_CHAIN): string[] {
+  const errors: string[] = [];
+  const ids = Object.keys(levels);
+  const roots = ids.filter((id) => levels[id].parent === null);
+  if (roots.length !== 1) errors.push(`expected exactly one root, found ${roots.length} (${roots.join(', ')})`);
+  for (const id of ids) {
+    if (levels[id].id !== id) errors.push(`${id}: id field "${levels[id].id}" does not match key`);
+    const p = levels[id].parent;
+    if (p !== null && !(p in levels)) errors.push(`${id}: parent "${p}" does not exist`);
+  }
+  for (const id of ids) {
+    const seen = new Set<string>();
+    let cur: string | null = id;
+    while (cur !== null && cur in levels) {
+      if (seen.has(cur)) {
+        errors.push(`${id}: cycle through ${[...seen].join(' → ')}`);
+        break;
+      }
+      seen.add(cur);
+      cur = levels[cur].parent;
+    }
+    if (cur === null && roots.length === 1 && !seen.has(roots[0])) errors.push(`${id}: does not reach root ${roots[0]}`);
+  }
+  if (mainChain.length) {
+    if (levels[mainChain[0]]?.parent !== null) errors.push(`MAIN_CHAIN must start at the root, starts at ${mainChain[0]}`);
+    for (let i = 1; i < mainChain.length; i++) {
+      if (levels[mainChain[i]]?.parent !== mainChain[i - 1]) errors.push(`MAIN_CHAIN: ${mainChain[i]} is not a child of ${mainChain[i - 1]}`);
+    }
+    for (const id of ids) {
+      if (mainChain.includes(id)) continue;
+      const p = levels[id].parent;
+      if (p === null || !mainChain.includes(p)) errors.push(`side branch ${id} must hang off a MAIN_CHAIN level (parent ${p})`);
+    }
+  }
+  return errors;
+}

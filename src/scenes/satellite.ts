@@ -8,6 +8,7 @@ import { RadiationShower, setHeat } from '../graphics/effects';
 import { createEarth } from '../graphics/earth';
 import { BaseLevel, type Anchor } from './base';
 import { evaluateSystem } from '../models/system-model';
+import { beamFootprint } from '../models/array-factor';
 import { systemInput } from '../app/system';
 
 /**
@@ -19,7 +20,8 @@ import { systemInput } from '../app/system';
 export class SatelliteLevel extends BaseLevel {
   readonly id = 'satellite' as const;
   readonly radius = 5.5;
-  home = { pos: v3(7.4, 2.6, 9.2), target: v3(0, -0.3, 0) };
+  // sunlit side (key light comes from upper-left): cells, MLI and arrays read clearly
+  home = { pos: v3(-7.6, 3.1, 8.9), target: v3(0, -0.25, 0.3) };
   private wings: THREE.Group[] = [];
   private payload!: THREE.Group;
   private obc!: THREE.Group;
@@ -27,6 +29,11 @@ export class SatelliteLevel extends BaseLevel {
   private earth!: ReturnType<typeof createEarth>;
   private plume!: THREE.Mesh;
   private arrayTile = v3(0.55, -0.66, -0.02);
+  private beam = new THREE.Group();
+  private beamCone!: THREE.Mesh;
+  private beamRim!: THREE.LineLoop;
+  private beamAnchor = new THREE.Object3D();
+  private beamKey = '';
 
   build(): void {
     const r = this.root;
@@ -46,6 +53,13 @@ export class SatelliteLevel extends BaseLevel {
       box(W, H, t, shellSilver, [0, 0, D / 2]),
       box(W, H, t, shellSilver, [0, 0, -D / 2]),
     );
+    // MLI blanket seams (Kapton tape) — breaks the flat "plastic box" read of the side panels
+    const tape = mat.anodized(0x2a2620);
+    for (const x of [1, -1]) {
+      bus.add(box(0.004, H - 0.04, 0.03, tape, [(x * (W / 2 + 0.019)), 0, -0.18]));
+      bus.add(box(0.004, 0.03, D - 0.04, tape, [(x * (W / 2 + 0.019)), 0.12, 0]));
+    }
+    for (const z of [1, -1]) bus.add(box(0.03, H - 0.04, 0.004, tape, [0.35, 0, z * (D / 2 + 0.019)]));
     // aluminium frame edges
     const frameMat = mat.aluminum();
     const e = 0.05;
@@ -77,7 +91,7 @@ export class SatelliteLevel extends BaseLevel {
     isl.position.set(0.7, H / 2, -0.35);
     bus.add(isl);
     r.add(bus);
-    this.addComponent({ id: 'bus', name: 'Bus Structure', sub: 'Al honeycomb · MLI', object: bus, labelLocal: v3(W / 2, 0.2, D / 2), desc: 'Primary structure carrying launch loads, wrapped in multi-layer insulation (MLI). Houses avionics, power, propulsion and the payload.', specs: ['Envelope 2.4 × 1.2 × 1.4 m', 'Al honeycomb panels, CFRP frame', 'Gold / silver MLI blankets'] });
+    this.addComponent({ essential: true, id: 'bus', name: 'Bus Structure', sub: 'Al honeycomb · MLI', object: bus, labelLocal: v3(W / 2, 0.2, D / 2), desc: 'Primary structure carrying launch loads, wrapped in multi-layer insulation (MLI). Houses avionics, power, propulsion and the payload.', specs: ['Envelope 2.4 × 1.2 × 1.4 m', 'Al honeycomb panels, CFRP frame', 'Gold / silver MLI blankets'] });
 
     // ---------- Phased arrays (nadir) ----------
     const arrays = new THREE.Group();
@@ -85,6 +99,15 @@ export class SatelliteLevel extends BaseLevel {
       const tile = new THREE.Group();
       tile.add(box(1.0, 0.05, 1.2, mat.darkPanel(), [0, 0, 0]));
       tile.add(box(1.04, 0.02, 1.24, mat.aluminum(), [0, 0.03, 0]));
+      // white radome bezel + 4×4 sub-array tile seams (each tile = one beamformer IC group)
+      const bezel = mat.whitePaint();
+      tile.add(box(1.06, 0.03, 0.03, bezel, [0, -0.03, 0.625]), box(1.06, 0.03, 0.03, bezel, [0, -0.03, -0.625]));
+      tile.add(box(0.03, 0.03, 1.22, bezel, [0.515, -0.03, 0]), box(0.03, 0.03, 1.22, bezel, [-0.515, -0.03, 0]));
+      const seam = mat.anodized(0x0d0f12);
+      for (let k = 1; k < 4; k++) {
+        tile.add(box(0.006, 0.008, 1.18, seam, [-0.48 + k * 0.24, -0.03, 0]));
+        tile.add(box(0.98, 0.008, 0.006, seam, [0, -0.03, -0.57 + k * 0.285]));
+      }
       const patch = new THREE.BoxGeometry(0.022, 0.006, 0.022);
       tile.add(instancedGrid(patch, mat.gold(), 32, 38, 0.03, 0.03, -0.028));
       tile.position.set(x, -H / 2 - 0.06, 0);
@@ -97,9 +120,14 @@ export class SatelliteLevel extends BaseLevel {
     const rad = new THREE.Group();
     rad.add(box(W - 0.1, 0.03, D - 0.1, mat.radiator(), [0, 0, 0]));
     for (let i = -5; i <= 5; i++) rad.add(box(0.012, 0.04, D - 0.14, mat.aluminum(), [i * 0.2, 0.02, 0]));
+    // embedded heat pipes (copper) spreading payload heat across the panel
+    const pipe = mat.copper();
+    for (const z of [-0.45, -0.15, 0.15, 0.45]) rad.add(box(W - 0.3, 0.018, 0.022, pipe, [0, -0.012, z]));
+    const radFrame = mat.whitePaint();
+    rad.add(box(W - 0.06, 0.05, 0.03, radFrame, [0, 0.01, (D - 0.07) / 2]), box(W - 0.06, 0.05, 0.03, radFrame, [0, 0.01, -(D - 0.07) / 2]));
     rad.position.set(0, H / 2 + 0.02, 0);
     r.add(rad);
-    this.addComponent({ id: 'radiator', name: 'Radiator', sub: 'Zenith OSR panel', object: rad, labelLocal: v3(-0.9, 0.05, -0.4), desc: 'Optical solar reflector panel rejecting waste heat to deep space by thermal radiation (σεT⁴). Heat pipes spread load from PA and processor.', specs: ['ε ≈ 0.85, α ≈ 0.1', 'Area sized by Q/(εσT⁴)', 'Embedded heat pipes'] });
+    this.addComponent({ essential: true, id: 'radiator', name: 'Radiator', sub: 'Zenith OSR panel', object: rad, labelLocal: v3(-0.9, 0.05, -0.4), desc: 'Optical solar reflector panel rejecting waste heat to deep space by thermal radiation (σεT⁴). Heat pipes spread load from PA and processor.', specs: ['ε ≈ 0.85, α ≈ 0.1', 'Area sized by Q/(εσT⁴)', 'Embedded heat pipes'] });
 
     // ---------- Internals ----------
     const payload = group(
@@ -140,11 +168,18 @@ export class SatelliteLevel extends BaseLevel {
     tank.position.set(-0.8, -0.05, -0.3);
     tank.castShadow = true;
     prop.add(tank);
+    // Hall-effect thruster: magnetic body, ceramic discharge channel (annulus), inner pole, cathode, gimbal
+    const channel = new THREE.Mesh(new THREE.RingGeometry(0.05, 0.085, 48), mat.ceramic(0xe8e0d0));
+    channel.rotation.y = -Math.PI / 2;
+    channel.position.x = -0.081;
     const thruster = group(
       cylinder(0.11, 0.16, mat.anodized(0x2a2d33), [0, 0, 0], 32, 'x'),
-      cylinder(0.085, 0.02, mat.ceramic(0xe8e0d0), [-0.09, 0, 0], 32, 'x'),
-      cylinder(0.035, 0.03, mat.aluminum(), [-0.1, 0, 0], 24, 'x'),
+      channel,
+      cylinder(0.045, 0.03, mat.nickel(), [-0.09, 0, 0], 24, 'x'),
+      cylinder(0.015, 0.12, mat.tungsten(), [-0.04, 0.13, 0], 12, 'x'),
+      new THREE.Mesh(new THREE.TorusGeometry(0.14, 0.012, 8, 40), mat.aluminum()),
     );
+    (thruster.children[4] as THREE.Mesh).rotation.y = Math.PI / 2;
     thruster.position.set(-W / 2 - 0.09, -0.15, 0.1);
     prop.add(thruster);
     prop.add(tube([v3(-0.8, -0.2, -0.3), v3(-1.0, -0.25, -0.05), v3(-1.12, -0.15, 0.1)], 0.01, mat.aluminum()));
@@ -166,12 +201,19 @@ export class SatelliteLevel extends BaseLevel {
     const solar = new THREE.Group();
     for (const s of [1, -1]) {
       const wing = new THREE.Group();
-      wing.add(cylinder(0.03, 0.7, mat.aluminum(), [0, 0, s * 0.35], 12, 'z'));
+      const cf = mat.cfrp();
+      // solar-array drive + CFRP yoke (V-struts) out to the first panel
       wing.add(cylinder(0.08, 0.1, mat.anodized(0x2a2d33), [0, 0, 0.02 * s], 24, 'z'));
+      wing.add(cylinder(0.03, 0.7, cf, [0, 0, s * 0.35], 12, 'z'));
+      for (const x of [0.75, -0.75]) wing.add(tube([v3(0, 0, s * 0.1), v3(x * 0.5, 0, s * 0.45), v3(x, 0, s * 0.72)], 0.014, cf, 12));
+      wing.add(box(1.6, 0.03, 0.04, cf, [0, -0.005, s * 0.72]));
       for (let k = 0; k < 3; k++) {
         const zc = s * (0.7 + 0.73 + k * 1.46);
         const panel = new THREE.Group();
-        panel.add(box(2.0, 0.025, 1.4, mat.darkPanel(), [0, -0.014, 0]));
+        panel.add(box(2.0, 0.025, 1.4, cf, [0, -0.014, 0]));
+        panel.add(box(0.02, 0.03, 1.42, mat.aluminum(), [1.0, -0.01, 0]), box(0.02, 0.03, 1.42, mat.aluminum(), [-1.0, -0.01, 0]));
+        // spring hinges between panels
+        if (k < 2) for (const x of [0.6, -0.6]) panel.add(cylinder(0.018, 0.06, mat.nickel(), [x, -0.01, s * 0.73], 10, 'x'));
         const cellsMesh = new THREE.Mesh(new THREE.PlaneGeometry(1.96, 1.36), mat.solarCell());
         cellsMesh.rotation.x = -Math.PI / 2;
         cellsMesh.position.y = 0.0;
@@ -183,12 +225,12 @@ export class SatelliteLevel extends BaseLevel {
         wing.add(panel);
       }
       wing.position.set(0, 0.05, (s * D) / 2);
-      wing.rotation.z = 0.25;
+      wing.rotation.z = this.sunTrackAngle();
       this.wings.push(wing);
       solar.add(wing);
     }
     r.add(solar);
-    this.addComponent({ id: 'solar', name: 'Solar Array', sub: '2 wings · 16.8 m²', object: solar, labelLocal: v3(0, 0.05, 3.6), desc: 'Two deployable wings of triple-junction GaAs cells (~30 % efficient), rotated by a solar-array drive to track the Sun.', specs: ['6 panels × 2.8 m²', 'η ≈ 30 % (BOL)', 'Orbit-average ≈ 3.5 kW'] });
+    this.addComponent({ essential: true, id: 'solar', name: 'Solar Array', sub: '2 wings · 16.8 m²', object: solar, labelLocal: v3(0, 0.05, 3.6), desc: 'Two deployable wings of triple-junction GaAs cells (~30 % efficient), rotated by a solar-array drive to track the Sun.', specs: ['6 panels × 2.8 m²', 'η ≈ 30 % (BOL)', 'Orbit-average ≈ 3.5 kW'] });
 
     // ---------- Earth backdrop (not to scale in distance; correct limb geometry) ----------
     this.earth = createEarth({ radius: 3000, sunDir: this.ctx.sunDir, segments: 192, glow: 0.45 });
@@ -211,7 +253,7 @@ export class SatelliteLevel extends BaseLevel {
 
     // ---------- Engineering modes ----------
     this.modeFocus = {
-      signal: ['phased-array', 'payload', 'obc'],
+      signal: ['phased-array', 'payload', 'obc', 'user-beam'],
       power: ['solar', 'pcdu', 'battery', 'payload', 'obc'],
       thermal: ['payload', 'obc', 'radiator', 'pcdu', 'bus'],
       radiation: ['obc', 'payload', 'pcdu', 'bus'],
@@ -229,9 +271,24 @@ export class SatelliteLevel extends BaseLevel {
     this.addFlow('thermal', new FlowPath([v3(-0.7, 0.3, 0.2), v3(-0.7, 0.58, 0.1), v3(0.3, 0.62, -0.2)], { color: COLORS.thermal, count: 16, size: 0.045, speed: 0.18, tube: 0.006 }));
     for (let i = 0; i < 5; i++) this.addFlow('thermal', new FlowPath([v3(-0.9 + i * 0.45, 0.65, -0.3 + (i % 2) * 0.5), v3(-0.9 + i * 0.45, 2.4, -0.3 + (i % 2) * 0.5)], { color: '#ff9a6a', count: 8, size: 0.06, speed: 0.35 }));
 
+    // ---------- User beam (SIGNAL mode): cone + −3 dB footprint from the array state ----------
+    this.beamCone = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color: COLORS.signal, transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }));
+    this.beamRim = new THREE.LineLoop(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: '#cfe9ff', transparent: true, opacity: 0.9 }));
+    this.beam.add(this.beamCone, this.beamRim, this.beamAnchor);
+    this.beam.userData.noFade = true;
+    this.beam.visible = false;
+    r.add(this.beam);
+    this.addComponent({ id: 'user-beam', name: 'User Beam', sub: '−3 dB footprint · calculated', object: this.beamAnchor, desc: 'One of the phased-array user beams. Cone and footprint are the −3 dB contour of the same array factor used in BEAM LAB, steered by the current θ₀/φ₀ (flat-Earth projection onto the backdrop).', specs: ['From arrayN, spacing, steering, taper', 'Footprint size in BEAM LAB / COSMOS'], label: true });
+
     this.shower = new RadiationShower([v3(0.55, -0.23, 0), v3(-0.7, 0.3, 0.2), v3(-0.7, -0.25, 0.25)], 4, 16, COLORS.radiation, 0.06);
     r.add(this.shower.group);
     this.showers.push(this.shower);
+  }
+
+  /** Solar-array drive angle that turns the cell side (+Y) toward the Sun (rotation about the wing axis Z). */
+  private sunTrackAngle(): number {
+    const s = this.ctx.sunDir;
+    return Math.atan2(-s.x, s.y);
   }
 
   anchorFor(child: LevelId): Anchor | null {
@@ -246,10 +303,38 @@ export class SatelliteLevel extends BaseLevel {
   protected onModeChanged(mode: EngMode): void {
     this.shower?.setActive(mode === 'radiation');
     this.applyHeat();
+    if (this.beamCone) this.updateBeam(this.ctx.store.get());
   }
 
   onState(state: AppState, changed: Set<string>): void {
-    if (changed.has('params') || changed.has('mode')) this.applyHeat(state);
+    if (changed.has('params') || changed.has('mode')) {
+      this.applyHeat(state);
+      this.updateBeam(state);
+    }
+  }
+
+  /** Beam cone + footprint, recomputed only when the array state changes. */
+  private updateBeam(state: AppState): void {
+    const p = state.params;
+    const key = [p.arrayN, p.spacingLambda, p.steerDeg, p.steerAzDeg, p.weighting].join('|');
+    if (key === this.beamKey) return;
+    this.beamKey = key;
+    const f = beamFootprint({ n: p.arrayN, spacingLambda: p.spacingLambda, steerThetaDeg: p.steerDeg, steerPhiDeg: p.steerAzDeg, weighting: p.weighting }, 550, 72);
+    // array frame (+Y boresight) → spacecraft frame (nadir −Y): the BEAM LAB anchor flips about X
+    const apex = this.arrayTile.clone();
+    const groundY = -258; // top of the Earth backdrop
+    const rim = f.directions
+      .map(([x, y, z]) => v3(x, -y, -z))
+      .filter((d) => d.y < -0.05)
+      .map((d) => apex.clone().addScaledVector(d, (groundY - apex.y) / d.y));
+    if (rim.length < 3) return;
+    this.beamRim.geometry.dispose();
+    this.beamRim.geometry = new THREE.BufferGeometry().setFromPoints(rim);
+    const tri: THREE.Vector3[] = [];
+    rim.forEach((q, i) => tri.push(apex, q, rim[(i + 1) % rim.length]));
+    this.beamCone.geometry.dispose();
+    this.beamCone.geometry = new THREE.BufferGeometry().setFromPoints(tri);
+    this.beamAnchor.position.copy(rim.reduce((a, b) => a.add(b), v3(0, 0, 0)).divideScalar(rim.length));
   }
 
   private applyHeat(state = this.ctx.store.get()): void {
@@ -265,13 +350,14 @@ export class SatelliteLevel extends BaseLevel {
   }
 
   protected tick(dt: number): void {
+    this.beam.visible = this.mode === 'signal' && this.alpha > 0.5;
     this.earth.update(this.time);
     const ea = THREE.MathUtils.smoothstep(this.alpha, 0.85, 1);
     this.earth.setOpacity(ea);
     this.earth.group.visible = ea > 0.01;
     this.shower.setLevelAlpha(this.alpha);
     this.shower.update(dt);
-    const sunTrack = 0.25 + (this.decorative ? Math.sin(this.time * 0.05) * 0.08 : 0);
+    const sunTrack = this.sunTrackAngle() + (this.decorative ? Math.sin(this.time * 0.05) * 0.03 : 0);
     for (const w of this.wings) w.rotation.z = sunTrack;
     (this.plume.material as THREE.MeshBasicMaterial).opacity = (this.mode === 'power' || this.mode === 'structure' ? 0.3 : 0.08) * (this.decorative ? 0.85 + 0.15 * Math.sin(this.time * 30) : 0.92) * this.alpha;
   }

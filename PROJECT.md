@@ -42,6 +42,21 @@ scale lives in the same navigation system and is linked by calculated models.
 - [x] Quality presets + adaptive pixel ratio, lazy-loaded levels, GPU residency limit
 - [x] Unit tests for all models and navigation
 
+## V2 status (structure · robustness · mobile · visual)
+
+- [x] `main.ts` reduced to wiring; `src/runtime/` (renderer, render loop, input, viewport, performance)
+- [x] WebGL 2 required explicitly, with a guidance page
+- [x] ScaleManager: last-intent navigation, load/prepare failure recovery, no wedged busy state, reduced motion
+- [x] Level-graph validator, parameter domain limits, input gesture state machine (all unit-tested)
+- [x] Quality: layout vs GPU breakpoints separated, SSAO removed, feature-aware degradation
+- [x] Accessibility: keyboard-reachable callouts and parts list, ARIA roles/states, focus rings
+- [x] Landscape-phone inspector layout
+- [x] Beam Lab: calculated −3 dB Earth footprint, λ-spaced wavefronts, phase legend
+- [x] Satellite hero fidelity pass, calculated user beam in SIGNAL mode
+- [x] Signal pulse grammar, exploded-view assembly guides, coupling-strip change highlighting
+- [ ] Real-device (phone / Surface / GPU) frame-time measurements — not yet recorded
+- [ ] Level construction spread over idle frames (first-visit hitch, see docs/performance-results.md)
+
 ## Roadmap (post-V1)
 
 - Doppler & rain-fade (ITU-R P.618) in the link budget; interference (C/I)

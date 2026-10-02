@@ -8,7 +8,10 @@ export interface LabelSpec {
   /** anchor in the object's local space */
   local?: THREE.Vector3;
   group: string;
-  /** higher = kept longer when label density drops (selected always wins) */
+  /**
+   * Higher = kept longer when density drops or a column overflows.
+   * Selected (always) > navigable child (3) > essential engineering part (2) > contextual (1).
+   */
   priority?: number;
   onClick?: () => void;
 }
@@ -65,7 +68,16 @@ export class LabelLayer {
     el.innerHTML = `<span class="callout-title">${spec.text}</span>${spec.sub ? `<span class="callout-sub">${spec.sub}</span>` : ''}`;
     if (spec.onClick) {
       el.classList.add('clickable');
+      el.setAttribute('role', 'button');
+      el.tabIndex = 0;
+      el.setAttribute('aria-label', spec.sub ? `${spec.text}, ${spec.sub}` : spec.text);
       el.addEventListener('click', spec.onClick);
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          spec.onClick!();
+        }
+      });
     }
     this.host.appendChild(el);
     const line = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
@@ -111,7 +123,7 @@ export class LabelLayer {
     if (!this.enabled || !active.length) return;
     // density: keep the selected callout, then navigable/essential ones, then the rest
     const budget = Math.max(1, Math.min(this.maxLabels, Math.ceil(active.length * this.density)));
-    const ranked = [...active].sort((a, b) => (b.highlighted ? 1e6 : b.priority ?? 1) - (a.highlighted ? 1e6 : a.priority ?? 1));
+    const ranked = [...active].sort((a, b) => rank(b) - rank(a));
     const allowed = new Set(ranked.slice(0, budget));
     const left: LabelItem[] = [];
     const right: LabelItem[] = [];
@@ -137,10 +149,18 @@ export class LabelLayer {
   }
 
   private layoutColumn(col: LabelItem[], x: number, side: 'left' | 'right', h: number): void {
-    col.sort((a, b) => a.sy - b.sy);
     const spacing = 40;
     const top = this.insets.top;
     const bottom = h - this.insets.bottom;
+    // a column that cannot fit drops its least important callouts instead of overlapping them
+    const capacity = Math.max(1, Math.floor((bottom - top) / spacing) + 1);
+    if (col.length > capacity) {
+      const keep = new Set([...col].sort((a, b) => rank(b) - rank(a)).slice(0, capacity));
+      for (const it of col) if (!keep.has(it)) this.hide(it);
+      col = col.filter((it) => keep.has(it));
+    }
+    // sorting by anchor height keeps leader lines from crossing within a column
+    col.sort((a, b) => a.sy - b.sy);
     const ys = col.map((it) => Math.min(Math.max(it.sy, top), bottom));
     for (let i = 1; i < ys.length; i++) ys[i] = Math.max(ys[i], ys[i - 1] + spacing);
     const overflow = ys.length ? ys[ys.length - 1] - bottom : 0;
@@ -171,6 +191,10 @@ export class LabelLayer {
     it.line.style.display = 'none';
     it.dot.style.display = 'none';
   }
+}
+
+function rank(it: { highlighted: boolean; priority?: number }): number {
+  return it.highlighted ? 1e6 : it.priority ?? 1;
 }
 
 function isShown(o: THREE.Object3D): boolean {

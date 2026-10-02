@@ -29,7 +29,9 @@ COSMOS ▸ SATELLITE ▸ PAYLOAD ▸ PCB ▸ CHIP ▸ DIE ▸ MOSFET ▸ SILICON
   pinch-off are computed), Friis cascade, ADC sampling/aliasing/quantisation, BPSK…64QAM in AWGN,
   planar array factor → **3D radiation surface generated from the AF**, link budget, power & thermal
   balance, intrinsic carrier density, PN-junction band bending.
-- **Cross-scale causality** — the bottom strip shows it live:
+- **Beam Lab footprint** — the −3 dB contour of the same array factor is projected onto the ground;
+  the satellite's SIGNAL mode shows the same beam and footprint from the nadir array.
+- **Cross-scale causality** — the bottom strip shows it live (changed values are highlighted with ▲/▼):
   `ADC bits → SNRq → ADC+DSP power → payload DC → heat → radiator area` and
   `array size → gain → EIRP → Pr → link margin`.
 - **Theory panel** per level: *INTUITION / ENGINEERING / THEORY* (equations, units, assumptions,
@@ -41,7 +43,9 @@ COSMOS ▸ SATELLITE ▸ PAYLOAD ▸ PCB ▸ CHIP ▸ DIE ▸ MOSFET ▸ SILICON
 
 ## Quick start
 
-Requirements: Node.js ≥ 20 and a WebGL2-capable browser.
+Requirements: Node.js ≥ 20.19 and a browser with **WebGL 2** (required — Three.js r163+ has no WebGL 1
+path). Without it the app shows a guidance page (update the browser, enable hardware acceleration,
+check `chrome://gpu`).
 
 ```powershell
 # Windows (PowerShell)
@@ -84,8 +88,12 @@ inspector with ≥ 44 px touch targets. Budgets and policy: [PERFORMANCE.md](PER
 
 ```
 src/
-  main.ts              renderer, loop, picking, keyboard, quality
-  app/                 navigation graph · state store · scale manager · system mapping
+  main.ts              bootstrap & wiring only
+  runtime/             renderer (WebGL 2 check, shader pre-warm) · render loop · input (tap/drag,
+                       pointercancel, multi-touch, shortcuts) · viewport (safe area, keep-in-view) ·
+                       performance (adaptive quality, frame stats, ?perf overlay)
+  app/                 navigation graph + validator · state store + parameter limits · scale manager
+                       (last-intent navigation, load-failure recovery) · quality policy · system mapping
   scenes/              one module per scale level (lazy-loaded chunks) + BaseLevel
   graphics/            camera rig · lighting · materials · procedural textures · particles
                        labels (leader lines) · explode · fade · earth · effects · post-processing
@@ -95,7 +103,9 @@ src/
   ui/                  HUD, analysis panels, intro, DOM helpers
 tests/                 Vitest unit tests
 scripts/smoke.mjs      optional headless smoke test (screenshots every level)
-scripts/perf.mjs       performance + mobile harness (tiers, draw calls, memory, DPR-3 phone)
+scripts/perf.mjs       performance + mobile harness (tiers, draw calls, 10 memory cycles, render-target
+                       leaks, phone/tablet portrait+landscape layouts and the mobile journey)
+scripts/visual.mjs     12-view visual regression capture (before/after comparison)
 ```
 
 Rendering, scientific models, scenes and UI are strictly separated: models are pure

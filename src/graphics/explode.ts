@@ -31,6 +31,28 @@ export class ExplodeRig {
     }
   }
 
+  /**
+   * Assembly guides: for each part, its assembled position and current position
+   * expressed in `root` space. Drawn as dashed lines so the explode reads as
+   * "this came out of there", not as floating parts.
+   */
+  guideSegments(root: THREE.Object3D, out: number[]): number {
+    const inv = new THREE.Matrix4().copy(root.matrixWorld).invert();
+    const a = new THREE.Vector3();
+    const b = new THREE.Vector3();
+    let n = 0;
+    for (const p of this.parts) {
+      if (!p.obj.parent || p.offset.lengthSq() < 1e-8) continue;
+      p.obj.parent.updateWorldMatrix(true, false);
+      a.copy(p.base).applyMatrix4(p.obj.parent.matrixWorld).applyMatrix4(inv);
+      b.copy(p.obj.position).applyMatrix4(p.obj.parent.matrixWorld).applyMatrix4(inv);
+      if (a.distanceToSquared(b) < 1e-8) continue;
+      out.push(a.x, a.y, a.z, b.x, b.y, b.z);
+      n++;
+    }
+    return n;
+  }
+
   get objects(): THREE.Object3D[] {
     return this.parts.map((p) => p.obj);
   }

@@ -4,6 +4,19 @@
  * policy is unit-tested; main.ts applies the resulting GraphicsConfig.
  */
 export type GraphicsQuality = 'high' | 'balanced' | 'performance';
+
+/**
+ * Two different questions, two different breakpoints:
+ *  - LAYOUT: is the screen small enough for the mobile UI (top nav + bottom sheet)?
+ *  - GPU:    is the device likely GPU/thermal constrained (phone-class)?
+ * A 900 px-wide tablet window gets the mobile layout but not automatically the
+ * phone GPU policy; a desktop with 4 cores gets the GPU policy but not the layout.
+ */
+export const MOBILE_LAYOUT_MAX = 900; // px, CSS width
+export const MOBILE_LAYOUT_SHORT = 520; // px, CSS height (touch landscape phones)
+/** Must equal the media query in src/styles/main.css (checked by tests/quality.test.ts). */
+export const MOBILE_LAYOUT_QUERY = `(max-width: ${MOBILE_LAYOUT_MAX}px), (max-height: ${MOBILE_LAYOUT_SHORT}px) and (pointer: coarse)`;
+export const COMPACT_GPU_MAX = 768; // px, CSS width
 export type QualityMode = 'auto' | GraphicsQuality;
 
 export interface GraphicsConfig {
@@ -11,8 +24,6 @@ export interface GraphicsConfig {
   shadows: boolean;
   shadowMapSize: number;
   bloom: boolean;
-  /** reserved: no SSAO pass is implemented (cost > benefit for this art style) */
-  ssao: boolean;
   /** multiplier on decorative particle counts (flows, radiation tracks, stars) */
   particles: number;
   environmentResolution: number;
@@ -27,9 +38,9 @@ export interface GraphicsConfig {
 }
 
 export const GRAPHICS_PRESETS: Record<GraphicsQuality, GraphicsConfig> = {
-  high: { maxDpr: 2, shadows: true, shadowMapSize: 2048, bloom: true, ssao: false, particles: 1, environmentResolution: 256, modelLod: 0, antialias: true, cinematicEffects: true, labelDensity: 1 },
-  balanced: { maxDpr: 1.5, shadows: true, shadowMapSize: 1024, bloom: true, ssao: false, particles: 0.6, environmentResolution: 128, modelLod: 1, antialias: true, cinematicEffects: true, labelDensity: 0.8 },
-  performance: { maxDpr: 1, shadows: false, shadowMapSize: 512, bloom: false, ssao: false, particles: 0.3, environmentResolution: 64, modelLod: 2, antialias: false, cinematicEffects: false, labelDensity: 0.5 },
+  high: { maxDpr: 2, shadows: true, shadowMapSize: 2048, bloom: true, particles: 1, environmentResolution: 256, modelLod: 0, antialias: true, cinematicEffects: true, labelDensity: 1 },
+  balanced: { maxDpr: 1.5, shadows: true, shadowMapSize: 1024, bloom: true, particles: 0.6, environmentResolution: 128, modelLod: 1, antialias: true, cinematicEffects: true, labelDensity: 0.8 },
+  performance: { maxDpr: 1, shadows: false, shadowMapSize: 512, bloom: false, particles: 0.3, environmentResolution: 64, modelLod: 2, antialias: false, cinematicEffects: false, labelDensity: 0.5 },
 };
 
 export const TIER_ORDER: GraphicsQuality[] = ['performance', 'balanced', 'high'];
@@ -53,17 +64,28 @@ export function readDeviceSignals(): DeviceSignals {
   };
 }
 
+/** Phone-class / constrained GPU: drives the GPU policy, never the layout. */
+export function isGpuConstrained(s: DeviceSignals): boolean {
+  const cores = s.cores ?? 4;
+  return s.width <= COMPACT_GPU_MAX || s.coarsePointer || cores <= 4 || (s.memoryGb !== undefined && s.memoryGb <= 4);
+}
+
 /** Initial estimate only — runtime frame performance can lower it later. Never UA-sniffing. */
 export function detectInitialQuality(s: DeviceSignals): GraphicsQuality {
   const cores = s.cores ?? 4;
-  if (s.width <= 768 || s.coarsePointer || cores <= 4 || (s.memoryGb !== undefined && s.memoryGb <= 4)) return 'performance';
+  if (isGpuConstrained(s)) return 'performance';
   if (s.width <= 1280 || s.dpr > 2 || cores <= 8) return 'balanced';
   return 'high';
 }
 
 /** Highest tier auto mode may climb to on this device class. */
 export function tierCeiling(s: DeviceSignals): GraphicsQuality {
-  return s.coarsePointer || s.width <= 768 ? 'balanced' : 'high';
+  return s.coarsePointer || s.width <= COMPACT_GPU_MAX ? 'balanced' : 'high';
+}
+
+/** Hysteresis thresholds follow the GPU class, not the layout. */
+export function policyFor(s: DeviceSignals): ControllerOptions {
+  return isGpuConstrained(s) ? MOBILE_POLICY : DESKTOP_POLICY;
 }
 
 /** DPR is the primary cost control: never render at raw device DPR (3× DPR ≈ 9× pixels). */
@@ -79,7 +101,6 @@ export const DEGRADATION_ORDER: { id: string; apply: (c: GraphicsConfig) => void
   { id: 'particles', apply: (c) => (c.particles *= 0.6) },
   { id: 'labels', apply: (c) => (c.labelDensity *= 0.75) },
   { id: 'bloom', apply: (c) => (c.bloom = false) },
-  { id: 'ssao', apply: (c) => (c.ssao = false) },
   { id: 'shadow-resolution', apply: (c) => (c.shadowMapSize = Math.max(512, c.shadowMapSize / 2)) },
   { id: 'shadows-off', apply: (c) => (c.shadows = false) },
   { id: 'dpr', apply: (c) => (c.maxDpr = Math.max(0.75, c.maxDpr * 0.75)) },
@@ -88,11 +109,35 @@ export const DEGRADATION_ORDER: { id: string; apply: (c: GraphicsConfig) => void
   { id: 'decorative-animation', apply: (c) => (c.cinematicEffects = false) },
 ];
 
-export const MAX_STEP = DEGRADATION_ORDER.length;
+const sameConfig = (a: GraphicsConfig, b: GraphicsConfig): boolean => (Object.keys(a) as (keyof GraphicsConfig)[]).every((k) => a[k] === b[k]);
+
+/**
+ * Feature-aware ladder for one base config: steps that would change nothing
+ * (bloom already off, shadows already off, DPR already at its floor …) are
+ * skipped, so every controller step has a real effect.
+ */
+export function effectiveSteps(base: GraphicsConfig): string[] {
+  const ids: string[] = [];
+  let c = { ...base };
+  for (const d of DEGRADATION_ORDER) {
+    const next = { ...c };
+    d.apply(next);
+    if (!sameConfig(next, c)) {
+      ids.push(d.id);
+      c = next;
+    }
+  }
+  return ids;
+}
+
+export function maxStep(base: GraphicsConfig): number {
+  return effectiveSteps(base).length;
+}
 
 export function applyDegradation(base: GraphicsConfig, step: number): GraphicsConfig {
+  const steps = new Set(effectiveSteps(base).slice(0, Math.max(0, step)));
   const c = { ...base };
-  for (let i = 0; i < Math.min(step, MAX_STEP); i++) DEGRADATION_ORDER[i].apply(c);
+  for (const d of DEGRADATION_ORDER) if (steps.has(d.id)) d.apply(c);
   return c;
 }
 
@@ -172,7 +217,7 @@ export class QualityController {
         this.suggestLower = this.tier !== 'performance' && down < this.opts.downFps * 0.75;
         return null;
       }
-      if (this.step < MAX_STEP) this.step++;
+      if (this.step < maxStep(GRAPHICS_PRESETS[this.tier])) this.step++;
       else return null;
       this.reset(now);
       return { kind: 'down', tier: this.tier, step: this.step, avgFps: down };

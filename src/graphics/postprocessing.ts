@@ -7,7 +7,7 @@ import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 
 /** Subtle vignette + film grain to finish the cinematic look. */
 const FinishShader = {
-  uniforms: { tDiffuse: { value: null }, uTime: { value: 0 }, uVignette: { value: 0.32 } },
+  uniforms: { tDiffuse: { value: null }, uTime: { value: 0 }, uVignette: { value: 0.26 } },
   vertexShader: /* glsl */ `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
   fragmentShader: /* glsl */ `
     uniform sampler2D tDiffuse; uniform float uTime; uniform float uVignette; varying vec2 vUv;
@@ -16,7 +16,7 @@ const FinishShader = {
       vec4 c = texture2D(tDiffuse, vUv);
       vec2 d = vUv - 0.5;
       float v = 1.0 - uVignette * smoothstep(0.25, 0.85, length(d) * 1.2);
-      float g = (hash(vUv * 1024.0 + uTime) - 0.5) * 0.018;
+      float g = (hash(vUv * 1024.0 + uTime) - 0.5) * 0.008; // barely perceptible: removes banding, never 'film grain'
       gl_FragColor = vec4(c.rgb * v + g, c.a);
     }`,
 };

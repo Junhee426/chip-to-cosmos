@@ -5,10 +5,11 @@ import { CameraRig, easeInOutSine, type View } from '../graphics/camera';
 import { LEVELS, pathBetween, residentSet, type LevelId } from './navigation';
 import type { Store } from './state';
 
-type Ctor = new (ctx: LevelContext) => BaseLevel;
+export type LevelCtor = new (ctx: LevelContext) => BaseLevel;
+export type LevelLoaders = Record<LevelId, () => Promise<LevelCtor>>;
 
 /** Lazy loaders — each level is its own chunk and only built when needed. */
-const LOADERS: Record<LevelId, () => Promise<Ctor>> = {
+export const LOADERS: LevelLoaders = {
   cosmos: () => import('../scenes/cosmos').then((m) => m.CosmosLevel),
   satellite: () => import('../scenes/satellite').then((m) => m.SatelliteLevel),
   array: () => import('../scenes/array').then((m) => m.ArrayLevel),
@@ -46,13 +47,22 @@ export class ScaleManager {
   current: BaseLevel | null = null;
   transition: TransitionInfo | null = null;
   private busy = false;
-  private queue: LevelId | null = null;
+  /** latest requested destination — "last intent wins" */
+  private intent: LevelId | null = null;
+  /** 1 = normal; < 1 shortens transitions (prefers-reduced-motion) */
+  motionScale = 1;
   onArrive: (id: LevelId) => void = () => {};
+  /** a level failed to load/prepare or a transition threw; state has been recovered */
+  onError: (err: unknown, level: LevelId | null) => void = (e) => console.error(e);
   onLevelBuilt: (lvl: BaseLevel) => void = () => {};
   /** optimise + apply graphics + pre-compile shaders before the level is ever shown */
   prepare: (lvl: BaseLevel) => Promise<void> = async () => {};
 
-  constructor(private scene: THREE.Scene, private rig: CameraRig, private ctx: LevelContext, private store: Store) {}
+  private loaders: LevelLoaders;
+
+  constructor(private scene: THREE.Scene, private rig: CameraRig, private ctx: LevelContext, private store: Store, loaders: Partial<LevelLoaders> = {}) {
+    this.loaders = { ...LOADERS, ...loaders };
+  }
 
   get currentId(): LevelId | null {
     return this.current?.id ?? null;
@@ -67,18 +77,33 @@ export class ScaleManager {
     if (have) return have;
     let p = this.pending.get(id);
     if (!p) {
-      p = LOADERS[id]().then(async (C) => {
+      p = (async () => {
+        const C = await this.loaders[id]();
         const lvl = new C(this.ctx);
-        lvl.init();
-        lvl.root.visible = false;
-        this.scene.add(lvl.root);
-        this.onLevelBuilt(lvl);
-        await this.prepare(lvl);
+        try {
+          lvl.init();
+          lvl.root.visible = false;
+          this.scene.add(lvl.root);
+          this.onLevelBuilt(lvl);
+          await this.prepare(lvl);
+        } catch (e) {
+          // never leave a half-built level in the scene or the label layer
+          try {
+            lvl.dispose();
+          } catch {
+            /* ignore secondary failure */
+          }
+          throw e;
+        }
         this.levels.set(id, lvl);
-        this.pending.delete(id);
         return lvl;
+      })();
+      // success or failure: the next ensure() starts fresh instead of re-awaiting a rejected promise
+      const tracked = p.finally(() => {
+        if (this.pending.get(id) === tracked) this.pending.delete(id);
       });
-      this.pending.set(id, p);
+      this.pending.set(id, tracked);
+      p = tracked;
     }
     return p;
   }
@@ -97,27 +122,62 @@ export class ScaleManager {
     this.arrive(lvl);
   }
 
-  /** Navigate through the level tree with continuous zoom transitions. */
-  async goTo(target: LevelId, stepDuration?: number): Promise<void> {
-    if (this.busy) {
-      this.queue = target;
-      return;
+  /**
+   * Navigate through the level tree with continuous zoom transitions.
+   *
+   * Semantics — **last intent wins**: calling goTo() while a transition runs only
+   * replaces the destination. A step that has started always completes (so the
+   * frame renormalisation is never left half-done); after each step the route is
+   * re-planned from the current level to the newest destination.
+   * Resolves true when the latest intent was reached.
+   */
+  async goTo(target: LevelId, stepDuration?: number): Promise<boolean> {
+    this.intent = target;
+    if (this.busy) return false;
+    if (!this.current || this.current.id === target) {
+      this.intent = null;
+      return !!this.current;
     }
-    if (!this.current || this.current.id === target) return;
     this.busy = true;
     this.store.set({ transitioning: true, selected: null });
-    const steps = pathBetween(this.current.id, target);
-    const dur = stepDuration ?? (steps.length > 1 ? 1.7 : 2.8);
-    for (const s of steps) {
-      if (s.dir === 'down') await this.stepDown(s.to, dur);
-      else await this.stepUp(s.to, dur);
-      if (this.queue) break;
+    let failedAt: LevelId | null = null;
+    try {
+      while (this.current && this.intent && this.intent !== this.current.id) {
+        const steps = pathBetween(this.current.id, this.intent);
+        const step = steps[0];
+        const dur = (stepDuration ?? (steps.length > 1 ? 1.7 : 2.8)) * this.motionScale;
+        failedAt = step.to;
+        if (step.dir === 'down') await this.stepDown(step.to, dur);
+        else await this.stepUp(step.to, dur);
+        failedAt = null;
+      }
+      return !!this.current && this.current.id === target;
+    } catch (e) {
+      this.recover();
+      this.onError(e, failedAt);
+      return false;
+    } finally {
+      this.intent = null;
+      this.busy = false;
+      this.transition = null;
+      this.store.set({ transitioning: false });
     }
-    this.busy = false;
-    this.store.set({ transitioning: false });
-    const q = this.queue;
-    this.queue = null;
-    if (q && q !== this.current?.id) await this.goTo(q);
+  }
+
+  /** Put the current level back into a clean, interactive state after a failed step. */
+  private recover(): void {
+    this.rig.cancelFlight();
+    const cur = this.current;
+    for (const l of this.levels.values()) if (l !== cur) this.hide(l);
+    if (!cur) return;
+    this.resetRoot(cur);
+    cur.root.visible = true;
+    cur.clearFocus();
+    cur.setLevelAlpha(1);
+    cur.active = true;
+    this.rig.camera.up.set(0, 1, 0);
+    this.rig.setView(cur.home);
+    this.ctx.labels.setActiveGroup(cur.id);
   }
 
   private anchorMatrix(parent: BaseLevel, child: BaseLevel): { m: THREE.Matrix4; q: THREE.Quaternion; s: number; focus?: string } {
@@ -154,7 +214,7 @@ export class ScaleManager {
       from.setFocusProgress(focus, p);
       from.setLevelAlpha(1 - smooth(0.62, 0.97, p));
       to.setLevelAlpha(smooth(0.42, 0.88, p));
-    });
+    }, true);
     // renormalise frame
     const inv = m.clone().invert();
     this.rig.camera.position.applyMatrix4(inv);
@@ -193,7 +253,7 @@ export class ScaleManager {
       to.setFocusProgress(focus, 1 - p);
       to.setLevelAlpha(smooth(0.03, 0.38, p));
       from.setLevelAlpha(1 - smooth(0.12, 0.5, p));
-    });
+    }, true);
     to.clearFocus();
     this.hide(from);
     this.resetRoot(from);
@@ -240,7 +300,14 @@ export class ScaleManager {
     const next = () => {
       const id = todo.shift();
       if (!id || this.current?.id !== lvl.id) return;
-      void this.ensure(id).then(() => idle(next));
+      // a failed preload is not fatal: the level is retried when actually navigated to
+      this.ensure(id).then(
+        () => idle(next),
+        (e) => {
+          console.warn(`preload of ${id} failed`, e);
+          idle(next);
+        },
+      );
     };
     idle(next);
   }
@@ -292,7 +359,7 @@ function isNoFade(o: THREE.Object3D): boolean {
 }
 
 function idle(fn: () => void): void {
-  const ric = (window as unknown as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number }).requestIdleCallback;
+  const ric = (globalThis as unknown as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number }).requestIdleCallback;
   if (ric) ric(fn, { timeout: 1500 });
   else setTimeout(fn, 250);
 }

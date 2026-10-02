@@ -172,3 +172,84 @@ export const ARRAY_META: ModelMeta = {
   reference: 'C. A. Balanis, Antenna Theory; R. J. Mailloux, Phased Array Antenna Handbook',
   kind: 'calculated',
 };
+
+export interface Footprint {
+  /** −3 dB contour on a flat ground plane at `altitudeKm` along boresight: (x, z) in km */
+  contourKm: [number, number][];
+  /** unit directions of the contour (array frame, +Y = boresight) */
+  directions: [number, number, number][];
+  /** ground point of the beam peak (km) */
+  centerKm: [number, number];
+  /** extent along the steering plane and across it (km) */
+  alongKm: number;
+  acrossKm: number;
+  areaKm2: number;
+}
+
+/**
+ * −3 dB beam footprint, traced numerically from the same |AF·EP| used for the
+ * radiation surface: around the beam axis, step away until the pattern is 3 dB
+ * below the peak, then intersect that direction with a flat ground plane at the
+ * orbit altitude (flat-Earth approximation; valid for footprints ≪ Earth radius).
+ */
+export function beamFootprint(p: ArrayParams, altitudeKm: number, nAz = 72): Footprint {
+  const q = p.elementQ ?? 1.3;
+  const w = weights(p.n, p.weighting);
+  const t0 = (p.steerThetaDeg * Math.PI) / 180;
+  const p0 = (p.steerPhiDeg * Math.PI) / 180;
+  const axis: [number, number, number] = [Math.sin(t0) * Math.cos(p0), Math.cos(t0), Math.sin(t0) * Math.sin(p0)];
+  const gainAt = (d: [number, number, number]): number => {
+    const th = Math.acos(Math.max(-1, Math.min(1, d[1])));
+    const ph = Math.atan2(d[2], d[0]);
+    return planarAF(p, w, th, ph) * elementPattern(th, q);
+  };
+  const peak = gainAt(axis);
+  const half = peak / Math.SQRT2; // −3 dB in field amplitude
+  // orthonormal basis around the axis
+  const ref: [number, number, number] = Math.abs(axis[1]) > 0.99 ? [1, 0, 0] : [0, 1, 0];
+  const u = normalize(cross(axis, ref));
+  const v = normalize(cross(axis, u));
+  const contourKm: [number, number][] = [];
+  const directions: [number, number, number][] = [];
+  for (let k = 0; k < nAz; k++) {
+    const psi = (2 * Math.PI * k) / nAz;
+    const side: [number, number, number] = [u[0] * Math.cos(psi) + v[0] * Math.sin(psi), u[1] * Math.cos(psi) + v[1] * Math.sin(psi), u[2] * Math.cos(psi) + v[2] * Math.sin(psi)];
+    let alpha = 0;
+    let d = axis;
+    for (let a = 0.0005; a < 1.2; a += 0.0005) {
+      const c = Math.cos(a);
+      const s = Math.sin(a);
+      const cand: [number, number, number] = [axis[0] * c + side[0] * s, axis[1] * c + side[1] * s, axis[2] * c + side[2] * s];
+      if (gainAt(cand) < half) {
+        alpha = a;
+        d = cand;
+        break;
+      }
+    }
+    if (alpha === 0) continue;
+    directions.push(d);
+    if (d[1] > 1e-3) contourKm.push([(d[0] / d[1]) * altitudeKm, (d[2] / d[1]) * altitudeKm]);
+  }
+  const centerKm: [number, number] = [(axis[0] / axis[1]) * altitudeKm, (axis[2] / axis[1]) * altitudeKm];
+  // extents in the steering-plane frame
+  const ca = Math.cos(p0);
+  const sa = Math.sin(p0);
+  let minA = Infinity, maxA = -Infinity, minC = Infinity, maxC = -Infinity, area = 0;
+  contourKm.forEach(([x, z], i) => {
+    const a = x * ca + z * sa;
+    const c = -x * sa + z * ca;
+    minA = Math.min(minA, a); maxA = Math.max(maxA, a);
+    minC = Math.min(minC, c); maxC = Math.max(maxC, c);
+    const [x2, z2] = contourKm[(i + 1) % contourKm.length];
+    area += x * z2 - x2 * z;
+  });
+  return { contourKm, directions, centerKm, alongKm: maxA - minA, acrossKm: maxC - minC, areaKm2: Math.abs(area) / 2 };
+}
+
+function cross(a: [number, number, number], b: [number, number, number]): [number, number, number] {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+function normalize(a: [number, number, number]): [number, number, number] {
+  const l = Math.hypot(a[0], a[1], a[2]);
+  return [a[0] / l, a[1] / l, a[2] / l];
+}
