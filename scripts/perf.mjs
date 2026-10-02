@@ -73,6 +73,8 @@ const memory = [];
 const hitch = [];
 if (only.has('memory')) {
 const { ctx: c2, page: p2 } = await open({ width: 1600, height: 900 }, {}, '&quality=balanced');
+// shorter flights for the leak cycles: the same steps, renormalisations and level builds/disposals run
+await p2.evaluate(() => (window.c2c.mgr.motionScale = 0.2));
 for (let k = 0; k < CYCLES; k++) {
   await p2.evaluate(() => window.c2c.mgr.jumpTo('satellite'));
   await p2.waitForTimeout(800);
@@ -83,6 +85,7 @@ for (let k = 0; k < CYCLES; k++) {
   const r = await p2.evaluate(() => ({ geo: window.c2c.renderer.info.memory.geometries, tex: window.c2c.renderer.info.memory.textures, prog: window.c2c.renderer.info.programs.length, heapMB: performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null, maxFrameMs: Math.round(window.c2c.stats.maxMs), longFrames: window.c2c.stats.longFrames, p95: +window.c2c.stats.summary().p95Ms.toFixed(1) }));
   memory.push({ cycle: k + 1, geo: r.geo, tex: r.tex, prog: r.prog, heapMB: r.heapMB });
   hitch.push({ cycle: k + 1, maxFrameMs: r.maxFrameMs, longFrames: r.longFrames, p95Ms: r.p95 });
+  console.log(`cycle ${k + 1}: geo ${r.geo} tex ${r.tex} prog ${r.prog} heap ${r.heapMB} MB · max frame ${r.maxFrameMs} ms`);
 }
 console.log('\nmemory after satellite→die→satellite cycles');
 console.table(memory);
@@ -207,6 +210,7 @@ if (only.has('devices')) {
       }
       await page.screenshot({ path: `${out}/device-${name}-${orient}.png` });
       devices.push({ device: name, orient, size: `${vw}×${vh}`, ...r, ...j });
+      console.log(JSON.stringify(devices[devices.length - 1]));
       await ctx.close();
     }
   }
