@@ -130,9 +130,11 @@ if (want('visual')) {
     await page.evaluate(() => window.c2c.mgr.goTo('cosmos'));
     await at(page, 'cosmos');
     await page.waitForTimeout(1000);
+    // frame the satellite → terminal link so the emphasised stage is visible in 3D
+    await page.evaluate(() => { const c = window.c2c; c.mgr.current.orbitPaused = true; c.rig.controls.minDistance = 0; c.rig.setView(c.mgr.current.demoView('link')); });
     await page.evaluate(() => document.querySelector('.xray')?.scrollIntoView({ block: 'start' }));
     await page.hover('.xr[data-k="path"]');
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(2500);
     await page.screenshot({ path: `${out}/hero-08-link-xray.png` });
     console.log('  captured hero-08-link-xray');
     await ctx.close();
