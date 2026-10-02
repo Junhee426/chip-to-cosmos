@@ -32,6 +32,8 @@ export interface ComponentDef {
   /** id of an RF signal-chain block with detailed info */
   chain?: string;
   label?: boolean;
+  /** essential engineering part: its callout outlives contextual ones when space is short */
+  essential?: boolean;
 }
 
 /** Where a child level lives inside this level (local coordinates). */
@@ -146,7 +148,7 @@ export abstract class BaseLevel {
   registerLabels(onClick: (id: string) => void): void {
     for (const c of this.components) {
       if (c.label === false) continue;
-      this.ctx.labels.add({ id: c.id, text: c.name, sub: c.sub, object: c.object, local: c.labelLocal, group: this.id, priority: c.child ? 2 : 1, onClick: () => onClick(c.id) });
+      this.ctx.labels.add({ id: c.id, text: c.name, sub: c.sub, object: c.object, local: c.labelLocal, group: this.id, priority: c.child ? 3 : c.chain || c.essential ? 2 : 1, onClick: () => onClick(c.id) });
     }
   }
 

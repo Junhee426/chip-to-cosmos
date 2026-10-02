@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { DEGRADATION_ORDER, GRAPHICS_PRESETS, MAX_STEP, MOBILE_POLICY, DESKTOP_POLICY, QualityController, applyDegradation, detectInitialQuality, getRenderDpr, tierCeiling } from '../src/app/quality';
+import css from '../src/styles/main.css?raw';
+import { COMPACT_GPU_MAX, DEGRADATION_ORDER, GRAPHICS_PRESETS, MOBILE_LAYOUT_MAX, MOBILE_LAYOUT_QUERY, MOBILE_POLICY, DESKTOP_POLICY, QualityController, applyDegradation, detectInitialQuality, effectiveSteps, getRenderDpr, isGpuConstrained, maxStep, policyFor, tierCeiling } from '../src/app/quality';
 import { FrameStats } from '../src/graphics/perf';
 
 const desktop = { width: 1920, dpr: 1, cores: 16, memoryGb: 16, coarsePointer: false };
@@ -32,7 +33,7 @@ describe('DPR control', () => {
 
 describe('degradation ladder', () => {
   it('removes decoration in the specified order', () => {
-    expect(DEGRADATION_ORDER.map((d) => d.id)).toEqual(['particles', 'labels', 'bloom', 'ssao', 'shadow-resolution', 'shadows-off', 'dpr', 'environment', 'lod', 'decorative-animation']);
+    expect(DEGRADATION_ORDER.map((d) => d.id)).toEqual(['particles', 'labels', 'bloom', 'shadow-resolution', 'shadows-off', 'dpr', 'environment', 'lod', 'decorative-animation']);
   });
   it('is cumulative and monotone, and never mutates the preset', () => {
     const hi = GRAPHICS_PRESETS.high;
@@ -42,10 +43,10 @@ describe('degradation ladder', () => {
     const s3 = applyDegradation(hi, 3);
     expect(s3.bloom).toBe(false);
     expect(s3.shadows).toBe(true);
-    const s6 = applyDegradation(hi, 6);
-    expect(s6.shadows).toBe(false);
-    expect(s6.maxDpr).toBe(2);
-    const all = applyDegradation(hi, MAX_STEP);
+    const s5 = applyDegradation(hi, 5);
+    expect(s5.shadows).toBe(false);
+    expect(s5.maxDpr).toBe(2);
+    const all = applyDegradation(hi, maxStep(hi));
     expect(all.maxDpr).toBeLessThan(2);
     expect(all.modelLod).toBe(1);
     expect(all.cinematicEffects).toBe(false);
@@ -116,5 +117,49 @@ describe('frame statistics', () => {
     expect(m.p99Ms).toBe(80);
     expect(s.longFrames).toBe(5);
     expect(m.over33).toBeCloseTo(0.05, 9);
+  });
+});
+
+describe('feature-aware degradation (no no-op steps)', () => {
+  it('every effective step changes the configuration', () => {
+    for (const tier of ['high', 'balanced', 'performance'] as const) {
+      const base = GRAPHICS_PRESETS[tier];
+      for (let k = 1; k <= maxStep(base); k++) {
+        expect(applyDegradation(base, k)).not.toEqual(applyDegradation(base, k - 1));
+      }
+    }
+  });
+  it('skips steps that are already off in the tier', () => {
+    const perf = effectiveSteps(GRAPHICS_PRESETS.performance);
+    expect(perf).not.toContain('bloom');
+    expect(perf).not.toContain('shadows-off');
+    expect(perf).not.toContain('decorative-animation');
+    expect(effectiveSteps(GRAPHICS_PRESETS.high)).toContain('bloom');
+    expect('ssao' in GRAPHICS_PRESETS.high).toBe(false);
+  });
+  it('controller never takes a no-op step and stops at the end of the ladder', () => {
+    const c = new QualityController('auto', 'performance', 'balanced', MOBILE_POLICY);
+    run(c, 10, 120, 0);
+    expect(c.step).toBe(maxStep(GRAPHICS_PRESETS.performance));
+  });
+});
+
+describe('layout breakpoint ≠ GPU policy', () => {
+  it('constants are distinct concepts', () => {
+    expect(MOBILE_LAYOUT_MAX).toBe(900);
+    expect(COMPACT_GPU_MAX).toBe(768);
+  });
+  it('an 850 px desktop window gets the mobile layout but not the phone GPU policy', () => {
+    const s = { width: 850, dpr: 1, cores: 12, memoryGb: 16, coarsePointer: false };
+    expect(isGpuConstrained(s)).toBe(false);
+    expect(policyFor(s)).toBe(DESKTOP_POLICY);
+    expect(detectInitialQuality(s)).toBe('balanced');
+  });
+  it('a 4-core desktop gets the constrained GPU policy at full width', () => {
+    const s = { width: 1920, dpr: 1, cores: 4, coarsePointer: false };
+    expect(policyFor(s)).toBe(MOBILE_POLICY);
+  });
+  it('the CSS mobile media query is exactly MOBILE_LAYOUT_QUERY', () => {
+    expect(css).toContain(`@media ${MOBILE_LAYOUT_QUERY} {`);
   });
 });

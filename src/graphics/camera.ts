@@ -27,6 +27,8 @@ export class CameraRig {
     ease: (t: number) => number;
     resolve: () => void;
     onProgress?: (t: number) => void;
+    /** multiscale transition: must run to completion (frame renormalisation follows) */
+    critical: boolean;
   } | null = null;
 
   constructor(dom: HTMLElement, aspect: number) {
@@ -43,6 +45,11 @@ export class CameraRig {
     return this.flight !== null;
   }
 
+  /** true while a scale transition flight runs — user input must not cancel it */
+  get flightCritical(): boolean {
+    return this.flight?.critical ?? false;
+  }
+
   setView(v: View): void {
     this.camera.position.copy(v.pos);
     this.controls.target.copy(v.target);
@@ -54,14 +61,18 @@ export class CameraRig {
     return { pos: this.camera.position.clone(), target: this.controls.target.clone(), up: this.camera.up.clone() };
   }
 
-  flyTo(to: View, duration: number, ease = easeInOutCubic, onProgress?: (t: number) => void): Promise<void> {
+  flyTo(to: View, duration: number, ease = easeInOutCubic, onProgress?: (t: number) => void, critical = false): Promise<void> {
     this.flight?.resolve();
     return new Promise((resolve) => {
-      this.flight = { from: this.currentView(), to: { pos: to.pos.clone(), target: to.target.clone(), up: (to.up ?? new THREE.Vector3(0, 1, 0)).clone() }, t: 0, duration: Math.max(duration, 1e-3), ease, resolve, onProgress };
+      this.flight = { from: this.currentView(), to: { pos: to.pos.clone(), target: to.target.clone(), up: (to.up ?? new THREE.Vector3(0, 1, 0)).clone() }, t: 0, duration: Math.max(duration, 1e-3), ease, resolve, onProgress, critical };
       this.controls.enabled = false;
     });
   }
 
+  /**
+   * Stop a flight where it is. For a critical (scale-transition) flight the
+   * caller is responsible for the frame state; finishFlight() should be preferred.
+   */
   cancelFlight(): void {
     if (this.flight) {
       const f = this.flight;
@@ -69,6 +80,17 @@ export class CameraRig {
       this.controls.enabled = true;
       f.resolve();
     }
+  }
+
+  /** Jump a running flight to its end state (used for skips, keeps renormalisation consistent). */
+  finishFlight(): void {
+    const f = this.flight;
+    if (!f) return;
+    applyInterpolatedView(this.camera, this.controls.target, f.from, f.to, 1);
+    f.onProgress?.(1);
+    this.flight = null;
+    this.controls.enabled = true;
+    f.resolve();
   }
 
   update(dt: number): void {

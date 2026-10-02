@@ -14,5 +14,7 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts'],
     environment: 'node',
+    // lets tests read stylesheet text via `?raw` (e.g. to check the mobile media query)
+    css: true,
   },
 });

@@ -125,7 +125,7 @@ export class Intro {
   async skip(): Promise<void> {
     if (!this.running) return;
     this.cancelled = true;
-    this.rig.cancelFlight();
+    this.rig.finishFlight(); // complete the running scale step so renormalisation stays consistent
     while (this.mgr.isBusy) await wait(30);
     this.store.set({ explode: 0 });
     this.store.setParams({ vgs: 1.6 });
