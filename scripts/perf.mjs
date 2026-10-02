@@ -139,7 +139,6 @@ console.table([mobile]);
 console.table(mob);
 await c3.close();
 }
-await browser.close();
 
 // ---- 4. device layouts & mobile journey (emulation — not a real-device measurement) ----
 const devices = [];
@@ -218,6 +217,7 @@ if (only.has('devices')) {
   console.table(devices);
 }
 
+await browser.close();
 writeFileSync(`${out}/perf.json`, JSON.stringify({ env, tiers, memory, hitch, mobile, mobileLevels: mob, devices, errors }, null, 2));
 if (errors.length) {
   console.error('Page errors:\n' + errors.join('\n'));
