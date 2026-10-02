@@ -65,14 +65,28 @@ export function planarAF(p: ArrayParams, w: number[], theta: number, phi: number
   return sum1d(w, psiX) * sum1d(w, psiY);
 }
 
+/**
+ * |Σ wᵢ e^{j i ψ}| / Σ wᵢ. The phasor e^{j i ψ} is advanced by one complex
+ * multiplication per element instead of a cos/sin pair (same sum; rounding
+ * error ~ n·1e-16, far below anything displayed). This is the hot loop of the
+ * directivity integration and of the BEAM LAB surface.
+ */
 function sum1d(w: number[], psi: number): number {
+  const c = Math.cos(psi);
+  const sn = Math.sin(psi);
+  let pr = 1;
+  let pi = 0;
   let re = 0;
   let im = 0;
   let s = 0;
   for (let i = 0; i < w.length; i++) {
-    re += w[i] * Math.cos(i * psi);
-    im += w[i] * Math.sin(i * psi);
-    s += w[i];
+    const wi = w[i];
+    re += wi * pr;
+    im += wi * pi;
+    s += wi;
+    const t = pr * c - pi * sn;
+    pi = pr * sn + pi * c;
+    pr = t;
   }
   return Math.hypot(re, im) / s;
 }

@@ -49,9 +49,35 @@ export function arrayDirection(thetaDeg: number, phiDeg: number): Vec3 {
   return [Math.sin(t) * Math.cos(p), Math.cos(t), Math.sin(t) * Math.sin(p)];
 }
 
+/**
+ * ARRAY LOCAL → SATELLITE BODY rotation (row-major 3×3): π about X.
+ * It is a fixed mounting: the panel is bolted to the nadir deck and never moves.
+ * Electronic steering changes the element phases (and so the beam direction
+ * inside the array frame) — never this matrix.
+ */
+export const ARRAY_TO_BODY: readonly [Vec3, Vec3, Vec3] = [
+  [1, 0, 0],
+  [0, -1, 0],
+  [0, 0, -1],
+];
+
+/** Same mounting as a unit quaternion [x, y, z, w] (π about X), for scene graphs. */
+export const ARRAY_TO_BODY_QUAT: readonly [number, number, number, number] = [1, 0, 0, 0];
+
 /** ARRAY LOCAL → SATELLITE BODY (rotation by π about X; an involution). */
 export function arrayDirToBody(d: Vec3): Vec3 {
-  return [d[0], -d[1], -d[2]];
+  const m = ARRAY_TO_BODY;
+  return [dot(m[0], d), dot(m[1], d), dot(m[2], d)];
+}
+
+/** Earth-facing check: the array's physical normal (+Y local) in the body frame. */
+export function arrayNormalBody(): Vec3 {
+  return arrayDirToBody([0, 1, 0]);
+}
+
+/** Unit vector from the satellite toward the Earth centre (world frame). */
+export function nadirWorld(f: OrbitFrame): Vec3 {
+  return normalize(scale(f.posKm, -1));
 }
 export const bodyDirToArray = arrayDirToBody;
 

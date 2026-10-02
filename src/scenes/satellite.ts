@@ -9,7 +9,7 @@ import { createEarth } from '../graphics/earth';
 import { BaseLevel, type Anchor } from './base';
 import { beamSolution, solveSystem } from '../app/system';
 import { phaseColor } from '../graphics/effects';
-import { EARTH_RADIUS_KM, arrayDirToBody } from '../models/frames';
+import { ARRAY_TO_BODY_QUAT, EARTH_RADIUS_KM, arrayDirToBody } from '../models/frames';
 import { wavelengthM } from '../models/units';
 
 /** Earth backdrop: the real Earth scaled down uniformly (radius 3000 m ↔ 6371 km), so the
@@ -296,7 +296,7 @@ export class SatelliteLevel extends BaseLevel {
 
     // BEAM LAB sub-array on the radiating face: same N, spacing and phase colours (SIGNAL mode)
     this.subarray.position.copy(this.arrayTile);
-    this.subarray.quaternion.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI);
+    this.subarray.quaternion.fromArray(ARRAY_TO_BODY_QUAT); // fixed nadir mounting (frames.ts); steering never rotates it
     this.subarray.scale.setScalar(0.01); // BEAM LAB units are cm
     this.subarray.visible = false;
     r.add(this.subarray);
@@ -317,7 +317,7 @@ export class SatelliteLevel extends BaseLevel {
     if (child === 'payload') return { position: this.payload.position.clone(), size: 0.4, focus: 'payload' };
     if (child === 'array') {
       // one sub-array tile of the nadir panel; the beam lab radiates along +Y, so flip.
-      return { position: this.arrayTile.clone(), size: 0.06, quaternion: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI), focus: 'phased-array' };
+      return { position: this.arrayTile.clone(), size: 0.06, quaternion: new THREE.Quaternion().fromArray(ARRAY_TO_BODY_QUAT), focus: 'phased-array' };
     }
     return null;
   }

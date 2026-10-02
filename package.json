@@ -2,7 +2,7 @@
   "name": "chip-to-cosmos",
   "private": true,
   "version": "0.1.0",
-  "description": "Chip to Cosmos — From Electrons to Orbital Networks. Multiscale interactive 3D scientific visualization.",
+  "description": "Chip to Cosmos \u2014 From Electrons to Orbital Networks. Multiscale interactive 3D scientific visualization.",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "profile:beam": "VITE_PROFILE=1 vitest run tests/beam-profile.test.ts"
   },
   "license": "MIT",
   "dependencies": {

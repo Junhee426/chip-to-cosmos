@@ -194,3 +194,49 @@ describe('educational presets', () => {
     expect(arrayMetrics({ n: 16, spacingLambda: gl.input.spacingLambda, steerThetaDeg: gl.input.steerThetaDeg, steerPhiDeg: 0, weighting: 'uniform' }).gratingLobe).toBe(true);
   });
 });
+
+import { beamCaches, solvePattern, patternKey } from '../src/models/beam-solution';
+
+describe('dependency-aware beam caches', () => {
+  it('pattern cache: equal array state → same PatternSolution object; frequency is not a pattern dependency', () => {
+    const a = { n: 16, spacingLambda: 0.5, steerThetaDeg: 21, steerPhiDeg: 0, weighting: 'uniform' as const };
+    expect(solvePattern(a)).toBe(solvePattern({ ...a }));
+    const s1 = beamSolution(P({ steerDeg: 21, freqGHz: 19.7 }));
+    const s2 = beamSolution(P({ steerDeg: 21, freqGHz: 27.5 }));
+    expect(s2.contour).toBe(s1.contour); // AF in d/λ: frequency does not change the pattern
+    expect(s2.link!.fsplDb).toBeGreaterThan(s1.link!.fsplDb); // but it does change the link
+    expect(patternKey(a)).not.toBe(patternKey({ ...a, steerThetaDeg: 22 }));
+  });
+
+  it('altitude change re-projects the footprint without re-integrating the pattern', () => {
+    beamCaches.pattern.clear();
+    const lo = beamSolution(P({ steerDeg: 17, altitudeKm: 550 }));
+    const misses = beamCaches.pattern.misses;
+    const hi = beamSolution(P({ steerDeg: 17, altitudeKm: 1100 }));
+    expect(beamCaches.pattern.misses).toBe(misses);
+    expect(hi.contour).toBe(lo.contour);
+    expect(hi.footprint).not.toBe(lo.footprint);
+    expect(hi.footprint.alongTrackKm).toBeGreaterThan(lo.footprint.alongTrackKm * 1.8);
+  });
+
+  it('receiver / power change re-runs only the link (pattern and footprint objects reused)', () => {
+    const a = beamSolution(P({ steerDeg: 19, rxGainDbi: 36 }));
+    const b = beamSolution(P({ steerDeg: 19, rxGainDbi: 40 }));
+    const c = beamSolution(P({ steerDeg: 19, rxGainDbi: 36, paOutW: 2 }));
+    expect(b.footprint).toBe(a.footprint);
+    expect(c.footprint).toBe(a.footprint);
+    expect(b.link!.marginDb - a.link!.marginDb).toBeCloseTo(4, 9);
+    expect(c.power.eirpDbw - a.power.eirpDbw).toBeCloseTo(10 * Math.log10(2), 9);
+  });
+
+  it('cached results equal a cold computation', () => {
+    const p = P({ steerDeg: 31, spacingLambda: 0.62, weighting: 'hann' });
+    const warm = beamSolution(p);
+    beamCaches.pattern.clear();
+    beamCaches.footprint.clear();
+    const cold = beamSolution({ ...p });
+    expect(cold.pattern.directivityDbi).toBe(warm.pattern.directivityDbi);
+    expect(cold.footprint.areaKm2).toBe(warm.footprint.areaKm2);
+    expect(cold.link!.marginDb).toBe(warm.link!.marginDb);
+  });
+});
