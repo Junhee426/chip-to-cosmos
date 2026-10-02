@@ -341,6 +341,8 @@ const satellitePanel: Builder = (store) => {
   const xray = linkXray(store);
   xsec.body.append(xray.el);
   root.append(sec.el, xsec.el);
+  let ptsKey = '';
+  let pts: [number, number][] = [];
   const update = (s: AppState) => {
     const q = s.params;
     bitsS.set(q.adcBits); fsS.set(q.adcFsMsps); nS.set(q.arrayN); pS.update(s);
@@ -356,7 +358,13 @@ const satellitePanel: Builder = (store) => {
     bars.innerHTML = items.map(([n, v, c]) => `<div class="pbar"><span>${n}</span><div class="pbar-track"><i style="width:${(100 * v) / max}%;background:${c}"></i></div><b>${v.toFixed(0)} W</b></div>`).join('') + `<div class="pbar pbar-total"><span>Solar</span><div class="pbar-track"><i style="width:${(100 * sys.solarW) / max}%;background:var(--series-4)"></i></div><b>${sys.solarW.toFixed(0)} W</b></div>`;
     ro.set({ solar: fx(sys.solarW, 0), load: fx(sys.totalLoadW, 0), margin: `${sys.powerMarginW >= 0 ? '+' : ''}${fx(sys.powerMarginW, 0)}`, heat: fx(sys.heatW, 0), rad: fx(sys.radiatorM2, 2) });
     eq.innerHTML = `A_rad = Q / (εσ(T⁴ − T_sink⁴)) = ${fx(sys.heatW, 0)} W / (0.85·5.67×10⁻⁸·(300⁴ − 200⁴)) = <b>${fx(sys.radiatorM2, 2)} m²</b>`;
-    const pts: [number, number][] = [4, 6, 8, 10, 12].map((b) => [b, solveSystem({ ...q, adcBits: b }).payloadDcW]);
+    // payload DC does not depend on steering, taper, spacing or link geometry: recompute the
+    // five-point curve only when one of its inputs changes (not on every beam-steering frame)
+    const key = [q.adcFsMsps, q.arrayN, q.paOutW, q.powerMode, q.totalRfW, q.altitudeKm, q.modulation].join('|');
+    if (key !== ptsKey) {
+      ptsKey = key;
+      pts = [4, 6, 8, 10, 12].map((b) => [b, solveSystem({ ...q, adcBits: b }).payloadDcW]);
+    }
     chart.update([{ id: 'p', name: 'Payload DC', color: C1, points: pts }], [{ x: q.adcBits, y: sys.payloadDcW, label: `${sys.payloadDcW.toFixed(0)} W` }]);
   };
   return { el: root, update };
