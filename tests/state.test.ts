@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import src from '../src/ui/analysis.ts?raw';
+import analysisSrc from '../src/ui/analysis.ts?raw';
+import beamSrc from '../src/ui/beam-controls.ts?raw';
+
+const src = analysisSrc + beamSrc;
 import { DEFAULT_PARAMS, PARAM_LIMITS, createStore, sanitizeParams } from '../src/app/state';
 
 describe('parameter domains', () => {
@@ -13,7 +16,9 @@ describe('parameter domains', () => {
   it('clamps, rounds integers and rejects non-finite / invalid values', () => {
     expect(sanitizeParams({ arrayN: 0 })).toEqual({ arrayN: 4 });
     expect(sanitizeParams({ arrayN: 17.6 })).toEqual({ arrayN: 18 });
-    expect(sanitizeParams({ elevationDeg: 120 })).toEqual({ elevationDeg: 90 });
+    expect(sanitizeParams({ steerDeg: 120 })).toEqual({ steerDeg: 60 });
+    expect(sanitizeParams({ powerMode: 'total-rf-fixed' })).toEqual({ powerMode: 'total-rf-fixed' });
+    expect(sanitizeParams({ powerMode: 'boost' as never })).toEqual({});
     expect(sanitizeParams({ freqGHz: NaN })).toEqual({});
     expect(sanitizeParams({ altitudeKm: Infinity })).toEqual({});
     expect(sanitizeParams({ modulation: 'FSK' as never })).toEqual({});

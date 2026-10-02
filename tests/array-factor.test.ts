@@ -61,7 +61,11 @@ describe('beam footprint (−3 dB, flat-Earth)', () => {
   it('steering moves the footprint and stretches it along the scan plane', () => {
     const f0 = beamFootprint(base, 550);
     const f = beamFootprint({ ...base, steerThetaDeg: 40 }, 550);
-    expect(f.centerKm[0]).toBeCloseTo(550 * Math.tan((40 * Math.PI) / 180), 3);
+    // centre = true beam maximum: the cos^q element pattern squints it slightly toward boresight
+    const hp = arrayMetrics({ ...base, steerThetaDeg: 40 }).hpbwDeg;
+    expect(f.centerKm[0]).toBeLessThanOrEqual(550 * Math.tan((40 * Math.PI) / 180) + 1e-6);
+    expect(f.centerKm[0]).toBeGreaterThan(550 * Math.tan(((40 - hp / 4) * Math.PI) / 180));
+    expect(Math.abs(f.centerKm[1])).toBeLessThan(1e-6);
     expect(f.alongKm).toBeGreaterThan(f0.alongKm * 1.5);
     expect(f.areaKm2).toBeGreaterThan(f0.areaKm2);
   });

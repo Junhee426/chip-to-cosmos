@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import './styles/main.css';
 import { LEVELS, type LevelId } from './app/navigation';
 import { ScaleManager } from './app/scale-manager';
+import { beamSolution } from './app/system';
 import { createStore, type Quality } from './app/state';
 import { GRAPHICS_PRESETS, detectInitialQuality, getRenderDpr, policyFor, readDeviceSignals, tierCeiling, type GraphicsConfig } from './app/quality';
 import { CameraRig } from './graphics/camera';
@@ -13,6 +14,7 @@ import { createStars } from './graphics/earth';
 import type { LevelContext } from './scenes/base';
 import { Hud } from './ui/hud';
 import { Intro } from './ui/intro';
+import { HeroDemo } from './ui/hero-demo';
 import { checkWebGL2, createRenderer, prewarmLevel, reducedMotionScale, showUnsupported } from './runtime/renderer';
 import { RenderLoop } from './runtime/render-loop';
 import { InputController, bindKeyboard } from './runtime/input-controller';
@@ -64,11 +66,14 @@ async function boot(): Promise<void> {
   const post = new PostFX(renderer, scene, rig.camera, innerWidth, innerHeight, initialCfg.antialias ? 4 : 0);
 
   // ---- multiscale navigation ----
-  const ctx: LevelContext = { labels, sunDir: lighting.sunDir, store, quality: 'balanced', select: (id) => store.set({ selected: id }) };
+  const ctx: LevelContext = { labels, sunDir: lighting.sunDir, store, quality: 'balanced', select: (id) => store.set({ selected: id }), camera: rig.camera };
   const mgr = new ScaleManager(scene, rig, ctx, store);
   mgr.motionScale = motion;
   const navigate = (id: LevelId) => {
-    if (!intro.running) void mgr.goTo(id);
+    if (intro.running) return;
+    // any navigation request ends the demo first — it never traps the user
+    if (demo.running) void demo.skip().then(() => mgr.goTo(id));
+    else void mgr.goTo(id);
   };
   const back = () => {
     const s = store.get();
@@ -92,6 +97,9 @@ async function boot(): Promise<void> {
     replayIntro: () => void intro.play(),
     componentInfo: (id) => component(id),
     components: () => mgr.current?.components.filter((c) => c.label !== false) ?? [],
+    runBeamDemo: () => {
+      if (!intro.running) void demo.play();
+    },
   });
   viewport.attach(hud);
   const intro = new Intro(app, mgr, rig, store, () => {
@@ -101,6 +109,10 @@ async function boot(): Promise<void> {
       /* storage unavailable */
     }
   });
+
+  const demo = new HeroDemo(mgr, rig, store, hud, motion, () =>
+    hud.toast('Now try it: STEER, ARRAY SIZE, SPACING, TAPER — or the Grating lobe experiment.', { label: 'Open Beam Lab', run: () => navigate('array') }),
+  );
 
   // ---- performance: adaptive quality + overlay (decoration first; content never removed) ----
   perf = new PerformanceController(
@@ -187,11 +199,11 @@ async function boot(): Promise<void> {
       const c = component(id);
       if (c?.child) navigate(c.child);
     },
-    blocked: () => intro.running,
+    blocked: () => intro.running || demo.running,
   });
   bindKeyboard({
-    introRunning: () => intro.running,
-    skipIntro: () => void intro.skip(),
+    introRunning: () => intro.running || demo.running,
+    skipIntro: () => void (demo.running ? demo.skip() : intro.skip()),
     back,
     enter: () => {
       const c = component(store.get().selected);
@@ -222,7 +234,8 @@ async function boot(): Promise<void> {
   const splash = document.querySelector('.splash');
   setTimeout(() => splash?.remove(), 1000); // do not keep a transparent full-screen layer around
   // reduced motion: never autoplay the cinematic intro (it stays available from the HUD)
-  if (!seen && !startLevel && !params.has('nointro') && motion === 1) void intro.play();
+  if (!seen && !startLevel && !params.has('nointro') && !params.has('demo') && motion === 1) void intro.play();
+  if (params.has('demo')) void demo.play();
 
   // ---- frame ----
   new RenderLoop(({ dt, raw, elapsed }) => {
@@ -243,7 +256,8 @@ async function boot(): Promise<void> {
   }).start();
 
   (window as unknown as { c2c: unknown }).c2c = {
-    store, mgr, rig, scene, renderer, hud, post, viewport,
+    store, mgr, rig, scene, renderer, hud, post, viewport, demo,
+    beam: () => beamSolution(store.get().params),
     quality: perfCtl.quality,
     stats: perfCtl.stats,
     frameInfo: () => ({ ...perfCtl.frameInfo }),

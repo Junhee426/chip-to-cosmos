@@ -19,15 +19,15 @@ describe('cross-scale causality', () => {
     const big = evaluateSystem(systemInput({ ...DEFAULT_PARAMS, arrayN: 24 }));
     expect(big.gainDbi).toBeGreaterThan(base.gainDbi);
     expect(big.eirpDbw).toBeGreaterThan(base.eirpDbw);
-    expect(big.link.rxPowerDbw).toBeGreaterThan(base.link.rxPowerDbw);
-    expect(big.link.marginDb).toBeGreaterThan(base.link.marginDb);
+    expect(big.link!.rxPowerDbw).toBeGreaterThan(base.link!.rxPowerDbw);
+    expect(big.link!.marginDb).toBeGreaterThan(base.link!.marginDb);
   });
   it('energy balance: heat = load − radiated RF', () => {
     expect(base.heatW).toBeCloseTo(base.totalLoadW - base.rfRadiatedW, 9);
     expect(base.eirpDbw).toBeCloseTo(10 * Math.log10(DEFAULT_PARAMS.paOutW * DEFAULT_PARAMS.arrayN ** 2) + base.gainDbi, 9);
   });
   it('default design closes the link and the power budget', () => {
-    expect(base.link.marginDb).toBeGreaterThan(0);
+    expect(base.link!.marginDb).toBeGreaterThan(0);
     expect(base.powerMarginW).toBeGreaterThan(0);
   });
   it('radiator sizing and junction temperature', () => {

@@ -1,17 +1,16 @@
 import type { LevelId } from '../app/navigation';
 import type { AppState, Params, Store } from '../app/state';
-import { systemInput } from '../app/system';
+import { beamSolution, solveSystem } from '../app/system';
 import { IQChart, LineChart, PolarChart } from '../charts/charts';
 import { adcPowerW, adcTrace, idealSnrDb, nyquistOk } from '../models/adc';
-import { arrayMetrics, beamFootprint, progressivePhase } from '../models/array-factor';
 import { linkBudget, slantRangeM } from '../models/link-budget';
 import { berTheory, esN0FromEbN0, simulateConstellation, type Modulation } from '../models/modulation';
 import { mosfet, sweepVds, sweepVgs } from '../models/mosfet';
 import { junctionTemperatures } from '../models/power';
 import { DEFAULT_RX_CHAIN, friisCascade, noiseFloorDbm, type RfStage } from '../models/rf';
 import { bandGapEv, builtInPotential, diodeCurrent, intrinsicCarrierDensity, junctionProfile } from '../models/semiconductor';
-import { evaluateSystem } from '../models/system-model';
 import { formatSI, wavelengthM } from '../models/units';
+import { beamChanged, beamHero, km, km2, powerControls } from './beam-controls';
 import { fx, h, readout, section, segmented, slider } from './dom';
 
 export interface Analysis {
@@ -184,48 +183,51 @@ const payloadPanel: Builder = (store) => {
   return { el: root, update };
 };
 
-// ---------------------------------------------------------------- ARRAY
+// ---------------------------------------------------------------- ARRAY (BEAM LAB)
 const arrayPanel: Builder = (store) => {
   const root = h('div');
   const p0 = store.get().params;
-  const sec = section('Phased array — array factor', 'calculated');
+  const hero = section('Beam experiment', 'calculated');
+  const beam = beamHero(store);
+  hero.body.append(beam.el);
+  const sec = section('Engineering detail', 'calculated');
   const set = (k: keyof Params) => (v: number) => store.setParams({ [k]: v } as Partial<Params>);
   const n = slider({ label: 'Elements per side N', min: 4, max: 32, step: 1, value: p0.arrayN, format: (v) => `${v} × ${v}`, onInput: set('arrayN') });
-  const d = slider({ label: 'Element spacing d', min: 0.25, max: 1.2, step: 0.01, value: p0.spacingLambda, unit: 'λ', format: (v) => v.toFixed(2), onInput: set('spacingLambda') });
-  const st = slider({ label: 'Steering angle θ₀', min: -60, max: 60, step: 1, value: p0.steerDeg, unit: '°', onInput: set('steerDeg') });
   const az = slider({ label: 'Steering azimuth φ₀', min: 0, max: 180, step: 5, value: p0.steerAzDeg, unit: '°', onInput: set('steerAzDeg') });
   const w = segmented('Amplitude weighting', [{ value: 'uniform', label: 'Uniform' }, { value: 'cosine', label: 'Cosine' }, { value: 'hamming', label: 'Hamming' }, { value: 'hann', label: 'Hann' }] as const, p0.weighting, (v) => store.setParams({ weighting: v }));
+  const power = powerControls(store);
   const ro = readout([
     { key: 'd', label: 'Directivity (numerical)', unit: 'dBi' },
     { key: 'g', label: 'Gain (η = 70 %)', unit: 'dBi' },
-    { key: 'hpbw', label: 'Half-power beamwidth', unit: '°' },
-    { key: 'sll', label: 'Peak sidelobe level', unit: 'dB' },
     { key: 'te', label: 'Taper efficiency', unit: '%' },
     { key: 'gl', label: 'Grating lobes' },
-    { key: 'eirp', label: 'EIRP (P/elem × N² × G)', unit: 'dBW' },
-    { key: 'fpAlong', label: '−3 dB footprint, along scan', unit: 'km' },
-    { key: 'fpAcross', label: '−3 dB footprint, across scan', unit: 'km' },
-    { key: 'fpArea', label: 'Footprint area', unit: 'km²' },
+    { key: 'rf', label: 'Total RF power', unit: 'W' },
+    { key: 'eirp', label: 'EIRP', unit: 'dBW' },
+    { key: 'flatA', label: 'Lab footprint, along scan (flat ground)', unit: 'km' },
+    { key: 'flatC', label: 'Lab footprint, across scan (flat ground)', unit: 'km' },
+    { key: 'fpAlong', label: 'Earth footprint, along-track (spherical)', unit: 'km' },
+    { key: 'fpAcross', label: 'Earth footprint, cross-track (spherical)', unit: 'km' },
+    { key: 'fpArea', label: 'Earth footprint area', unit: 'km²' },
+    { key: 'off', label: 'Beam centre from nadir', unit: 'km' },
   ]);
-  const legend = h('div', 'phase-legend', '<span>Element phase (patch colour)</span><i aria-hidden="true"></i><div><span>0°</span><span>90°</span><span>180°</span><span>270°</span><span>360°</span></div>');
   const eq = eqLine('');
   const polar = new PolarChart(320);
   const cut = new LineChart({ xLabel: 'θ (deg)', yLabel: 'Normalised gain (dB)', height: 160, xDomain: [-90, 90], yDomain: [-50, 2] });
-  const fpNote = h('p', 'note', 'Footprint: −3 dB contour of the same pattern on flat ground at the link altitude (COSMOS level). Flat-Earth approximation.');
-  sec.body.append(n.el, d.el, st.el, az.el, w.el, ro.el, fpNote, eq, legend, h('div', 'chart-title', 'Polar cut through the steered beam'), polar.el, cut.el);
-  root.append(sec.el);
+  const fpNote = h('p', 'note', 'BEAM LAB draws the −3 dB contour on a flat ground plane (directions exact, distance compressed). COSMOS intersects the same contour with the spherical Earth; the numbers above marked "spherical" are that intersection.');
+  sec.body.append(n.el, az.el, w.el, power.el, ro.el, fpNote, eq, h('div', 'chart-title', 'Polar cut through the steered beam'), polar.el, cut.el);
+  root.append(hero.el, sec.el);
   const update = (s: AppState, changed: Set<string>) => {
     const q = s.params;
-    n.set(q.arrayN); d.set(q.spacingLambda); st.set(q.steerDeg); az.set(q.steerAzDeg); w.set(q.weighting);
-    if (!(changed.has('init') || ['params.arrayN', 'params.spacingLambda', 'params.steerDeg', 'params.steerAzDeg', 'params.weighting', 'params.paOutW', 'params.altitudeKm'].some((k) => changed.has(k)))) return;
-    const ap = { n: q.arrayN, spacingLambda: q.spacingLambda, steerThetaDeg: q.steerDeg, steerPhiDeg: q.steerAzDeg, weighting: q.weighting };
-    const m = arrayMetrics(ap);
-    const gain = m.directivityDbi + 10 * Math.log10(0.7);
-    const eirp = 10 * Math.log10(q.paOutW * q.arrayN * q.arrayN) + gain;
-    const fp = beamFootprint(ap, q.altitudeKm);
-    ro.set({ d: fx(m.directivityDbi, 1), g: fx(gain, 1), hpbw: fx(m.hpbwDeg, 1), sll: fx(m.sidelobeDb, 1), te: fx(m.taperEfficiency * 100, 0), gl: m.gratingLobe ? '⚠ present (d too large)' : 'none', eirp: fx(eirp, 1), fpAlong: fx(fp.alongKm, 0), fpAcross: fx(fp.acrossKm, 0), fpArea: fx(fp.areaKm2, 0) });
-    const phi = (progressivePhase(q.spacingLambda, q.steerDeg) * 180) / Math.PI;
-    eq.innerHTML = `Phase step φ = −k·d·sinθ₀ = −360°·${q.spacingLambda.toFixed(2)}·sin(${q.steerDeg}°) = <b>${phi.toFixed(1)}°</b> per element · grating-lobe limit d/λ < ${(1 / (1 + Math.abs(Math.sin((q.steerDeg * Math.PI) / 180)))).toFixed(2)}`;
+    beam.update(s, changed);
+    n.set(q.arrayN); az.set(q.steerAzDeg); w.set(q.weighting);
+    power.update(s);
+    if (!beamChanged(changed)) return;
+    const b = beamSolution(q);
+    const m = b.pattern;
+    const fp = b.footprint;
+    ro.set({ d: fx(m.directivityDbi, 1), g: fx(m.gainDbi, 1), te: fx(m.taperEfficiency * 100, 0), gl: m.gratingLobe ? `⚠ ${b.lobes.length} in visible space` : 'none', rf: fx(b.power.rfW, 0), eirp: fx(b.power.eirpDbw, 1), flatA: km(b.flat.alongKm), flatC: km(b.flat.acrossKm), fpAlong: km(fp.alongTrackKm), fpAcross: km(fp.crossTrackKm), fpArea: km2(fp.areaKm2), off: fp.nadirOffsetKm === null ? 'off Earth' : km(fp.nadirOffsetKm) });
+    const bx = (m.phaseStepX * 180) / Math.PI;
+    eq.innerHTML = `Phase step βx = −k·d·sinθ₀·cosφ₀ = −360°·${q.spacingLambda.toFixed(2)}·sin(${q.steerDeg}°)·cos(${q.steerAzDeg}°) = <b>${bx.toFixed(1)}°</b> per element · grating-lobe limit d/λ &lt; ${m.gratingLimit.toFixed(2)}`;
     polar.update(m.cut, q.steerDeg);
     cut.update([{ id: 'cut', name: 'AF·EP', color: C1, points: m.cut.map((c) => [c.thetaDeg, Math.max(c.db, -50)] as [number, number]) }], [{ x: q.steerDeg, y: Math.max(...m.cut.map((c) => c.db)), label: `θ₀ = ${q.steerDeg}°` }]);
   };
@@ -236,14 +238,18 @@ const arrayPanel: Builder = (store) => {
 const cosmosPanel: Builder = (store) => {
   const root = h('div');
   const p0 = store.get().params;
-  const sec = section('Downlink budget', 'calculated');
+  const sec = section('Downlink to the beam centre', 'calculated');
   const set = (k: keyof Params) => (v: number) => store.setParams({ [k]: v } as Partial<Params>);
   const alt = slider({ label: 'Altitude h', min: 340, max: 1200, step: 10, value: p0.altitudeKm, unit: 'km', onInput: set('altitudeKm') });
-  const el = slider({ label: 'Elevation angle', min: 10, max: 90, step: 1, value: p0.elevationDeg, unit: '°', onInput: set('elevationDeg') });
+  const st = slider({ label: 'Beam steering θ₀', min: -60, max: 60, step: 1, value: p0.steerDeg, unit: '°', onInput: set('steerDeg') });
   const fr = slider({ label: 'Frequency', min: 10.7, max: 30, step: 0.1, value: p0.freqGHz, unit: 'GHz', format: (v) => v.toFixed(1), onInput: set('freqGHz') });
-  const pt = slider({ label: 'PA output per element', min: 0.1, max: 4, step: 0.05, value: p0.paOutW, unit: 'W', format: (v) => v.toFixed(2), onInput: set('paOutW') });
+  const power = powerControls(store);
   const gr = slider({ label: 'User terminal gain Gr', min: 28, max: 45, step: 0.5, value: p0.rxGainDbi, unit: 'dBi', format: (v) => v.toFixed(1), onInput: set('rxGainDbi') });
+  const geo = h('p', 'note', 'The user terminal sits at the centre of the calculated footprint, so elevation and slant range follow from steering and altitude — the drawn link and the numbers are the same link.');
   const ro = readout([
+    { key: 'el', label: 'Elevation at beam centre', unit: '°' },
+    { key: 'off', label: 'Beam centre from nadir', unit: 'km' },
+    { key: 'fp', label: 'Footprint along × cross-track', unit: 'km' },
     { key: 'r', label: 'Slant range R', unit: 'km' },
     { key: 'fspl', label: 'Free-space path loss', unit: 'dB' },
     { key: 'pt', label: 'Tx power Pt', unit: '' },
@@ -257,23 +263,46 @@ const cosmosPanel: Builder = (store) => {
   ]);
   const eq = eqLine('');
   const chart = new LineChart({ xLabel: 'Elevation (deg)', yLabel: 'Link margin (dB)', height: 170, xDomain: [10, 90] });
-  sec.body.append(alt.el, el.el, fr.el, pt.el, gr.el, ro.el, eq, chart.el);
+  const chartNote = h('p', 'note', 'Curve: margin vs elevation with the current EIRP held fixed (geometry only). Marker: the calculated beam-centre link.');
+  sec.body.append(alt.el, st.el, fr.el, power.el, gr.el, geo, ro.el, eq, chart.el, chartNote);
   root.append(sec.el);
   const update = (s: AppState) => {
     const q = s.params;
-    alt.set(q.altitudeKm); el.set(q.elevationDeg); fr.set(q.freqGHz); pt.set(q.paOutW); gr.set(q.rxGainDbi);
-    const sys = evaluateSystem(systemInput(q));
+    alt.set(q.altitudeKm); st.set(q.steerDeg); fr.set(q.freqGHz); gr.set(q.rxGainDbi);
+    power.update(s);
+    const sys = solveSystem(q);
+    const b = sys.beam;
     const L = sys.link;
-    const rfW = q.paOutW * q.arrayN * q.arrayN;
-    ro.set({ r: fx(L.rangeKm, 0), fspl: fx(L.fsplDb, 1), pt: `${fx(rfW, 0)} W = ${fx(L.txPowerDbw, 1)} dBW`, gt: fx(sys.gainDbi, 1), eirp: fx(L.eirpDbw, 1), pr: `${fx(L.rxPowerDbw, 1)} dBW = ${fx(L.rxPowerDbm, 1)} dBm`, gt2: fx(L.gOverTDbK, 1), cn0: fx(L.cn0DbHz, 1), ebn0: fx(L.ebN0Db, 1), margin: `${L.marginDb >= 0 ? '+' : ''}${fx(L.marginDb, 1)}` });
+    const fp = b.footprint;
+    const dash = '—';
+    ro.set({
+      el: L ? fx(L.elevationDeg, 1) : 'above horizon',
+      off: fp.nadirOffsetKm === null ? dash : km(fp.nadirOffsetKm),
+      fp: fp.contour.length >= 3 ? `${km(fp.alongTrackKm)} × ${km(fp.crossTrackKm)}${fp.complete ? '' : ' (clipped)'}` : dash,
+      r: L ? fx(L.rangeKm, 0) : dash,
+      fspl: L ? fx(L.fsplDb, 1) : dash,
+      pt: `${fx(b.power.rfW, 0)} W = ${fx(10 * Math.log10(b.power.rfW), 1)} dBW`,
+      gt: fx(sys.gainDbi, 1),
+      eirp: fx(sys.eirpDbw, 1),
+      pr: L ? `${fx(L.rxPowerDbw, 1)} dBW = ${fx(L.rxPowerDbm, 1)} dBm` : dash,
+      gt2: L ? fx(L.gOverTDbK, 1) : dash,
+      cn0: L ? fx(L.cn0DbHz, 1) : dash,
+      ebn0: L ? fx(L.ebN0Db, 1) : dash,
+      margin: L ? `${L.marginDb >= 0 ? '+' : ''}${fx(L.marginDb, 1)}` : 'no link',
+    });
+    if (!L) {
+      eq.innerHTML = `The beam axis at θ₀ = ${q.steerDeg}° from ${q.altitudeKm} km points above the Earth limb (horizon at ${fx((Math.asin(6371 / (6371 + q.altitudeKm)) * 180) / Math.PI, 1)}° from nadir): no ground link.`;
+      chart.update([], []);
+      return;
+    }
     const lam = wavelengthM(q.freqGHz * 1e9);
     eq.innerHTML = `FSPL = 20·log10(4π·R/λ) = 20·log10(4π·${fx(L.rangeKm, 0)} km / ${fx(lam * 1000, 2)} mm) = <b>${fx(L.fsplDb, 1)} dB</b><br>Pr = Pt + Gt + Gr − FSPL − L = ${fx(L.txPowerDbw, 1)} + ${fx(sys.gainDbi, 1)} + ${fx(q.rxGainDbi, 1)} − ${fx(L.fsplDb, 1)} − 3.0 = <b>${fx(L.rxPowerDbw, 1)} dBW</b>`;
     const pts: [number, number][] = [];
     for (let e = 10; e <= 90; e += 2) {
-      const r = linkBudget({ altitudeKm: q.altitudeKm, elevationDeg: e, freqGHz: q.freqGHz, txPowerW: rfW, txGainDbi: sys.gainDbi, rxGainDbi: q.rxGainDbi, rxNoiseTempK: 250, otherLossesDb: 3, dataRateBps: sys.dataRateBps, requiredEbN0Db: L.ebN0Db - L.marginDb });
+      const r = linkBudget({ altitudeKm: q.altitudeKm, elevationDeg: e, freqGHz: q.freqGHz, txPowerW: b.power.rfW, txGainDbi: sys.gainDbi, rxGainDbi: q.rxGainDbi, rxNoiseTempK: 250, otherLossesDb: 3, dataRateBps: sys.dataRateBps, requiredEbN0Db: L.ebN0Db - L.marginDb });
       pts.push([e, r.marginDb]);
     }
-    chart.update([{ id: 'm', name: 'Margin', color: C1, points: pts }, { id: 'z', name: '0 dB', color: 'var(--text-muted)', dash: '3 3', width: 1, points: [[10, 0], [90, 0]] }], [{ x: q.elevationDeg, y: L.marginDb, label: `${L.marginDb.toFixed(1)} dB @ ${fx(slantRangeM(q.altitudeKm * 1000, q.elevationDeg) / 1000, 0)} km` }]);
+    chart.update([{ id: 'm', name: 'Margin (EIRP fixed)', color: C1, points: pts }, { id: 'z', name: '0 dB', color: 'var(--text-muted)', dash: '3 3', width: 1, points: [[10, 0], [90, 0]] }], [{ x: Math.max(10, L.elevationDeg), y: L.marginDb, label: `${L.marginDb.toFixed(1)} dB @ El ${L.elevationDeg.toFixed(0)}°, ${fx(slantRangeM(q.altitudeKm * 1000, L.elevationDeg) / 1000, 0)} km` }]);
   };
   return { el: root, update };
 };
@@ -287,7 +316,7 @@ const satellitePanel: Builder = (store) => {
   const bitsS = slider({ label: 'ADC resolution', min: 4, max: 12, step: 2, value: p0.adcBits, unit: 'bit', onInput: set('adcBits') });
   const fsS = slider({ label: 'ADC sample rate', min: 100, max: 2000, step: 10, value: p0.adcFsMsps, unit: 'MS/s', onInput: set('adcFsMsps') });
   const nS = slider({ label: 'Array elements per side', min: 4, max: 32, step: 1, value: p0.arrayN, onInput: set('arrayN') });
-  const pS = slider({ label: 'PA output per element', min: 0.1, max: 4, step: 0.05, value: p0.paOutW, unit: 'W', format: (v) => v.toFixed(2), onInput: set('paOutW') });
+  const pS = powerControls(store);
   const bars = h('div', 'pbars');
   const ro = readout([
     { key: 'solar', label: 'Solar array (orbit average)', unit: 'W' },
@@ -302,8 +331,8 @@ const satellitePanel: Builder = (store) => {
   root.append(sec.el);
   const update = (s: AppState) => {
     const q = s.params;
-    bitsS.set(q.adcBits); fsS.set(q.adcFsMsps); nS.set(q.arrayN); pS.set(q.paOutW);
-    const sys = evaluateSystem(systemInput(q));
+    bitsS.set(q.adcBits); fsS.set(q.adcFsMsps); nS.set(q.arrayN); pS.update(s);
+    const sys = solveSystem(q);
     const items = [
       ['PA (DC)', sys.paDcW, 'var(--series-2)'],
       ['DSP', sys.dspPowerW, 'var(--series-1)'],
@@ -314,7 +343,7 @@ const satellitePanel: Builder = (store) => {
     bars.innerHTML = items.map(([n, v, c]) => `<div class="pbar"><span>${n}</span><div class="pbar-track"><i style="width:${(100 * v) / max}%;background:${c}"></i></div><b>${v.toFixed(0)} W</b></div>`).join('') + `<div class="pbar pbar-total"><span>Solar</span><div class="pbar-track"><i style="width:${(100 * sys.solarW) / max}%;background:var(--series-4)"></i></div><b>${sys.solarW.toFixed(0)} W</b></div>`;
     ro.set({ solar: fx(sys.solarW, 0), load: fx(sys.totalLoadW, 0), margin: `${sys.powerMarginW >= 0 ? '+' : ''}${fx(sys.powerMarginW, 0)}`, heat: fx(sys.heatW, 0), rad: fx(sys.radiatorM2, 2) });
     eq.innerHTML = `A_rad = Q / (εσ(T⁴ − T_sink⁴)) = ${fx(sys.heatW, 0)} W / (0.85·5.67×10⁻⁸·(300⁴ − 200⁴)) = <b>${fx(sys.radiatorM2, 2)} m²</b>`;
-    const pts: [number, number][] = [4, 6, 8, 10, 12].map((b) => [b, evaluateSystem(systemInput({ ...q, adcBits: b })).payloadDcW]);
+    const pts: [number, number][] = [4, 6, 8, 10, 12].map((b) => [b, solveSystem({ ...q, adcBits: b }).payloadDcW]);
     chart.update([{ id: 'p', name: 'Payload DC', color: C1, points: pts }], [{ x: q.adcBits, y: sys.payloadDcW, label: `${sys.payloadDcW.toFixed(0)} W` }]);
   };
   return { el: root, update };
@@ -359,7 +388,7 @@ const diePanel: Builder = (store) => {
     el: root,
     update: (s) => {
       bitsS.set(s.params.adcBits); fsS.set(s.params.adcFsMsps);
-      const sys = evaluateSystem(systemInput(s.params));
+      const sys = solveSystem(s.params);
       const perChip = { ADC: sys.adcPowerW / 32 * 4, DSP: sys.dspPowerW / 32 * 4, 'RF + other': 6 };
       const max = Math.max(...Object.values(perChip));
       bars.innerHTML = Object.entries(perChip).map(([k, v], i) => `<div class="pbar"><span>${k}</span><div class="pbar-track"><i style="width:${(100 * v) / max}%;background:${[C3, C1, 'var(--text-muted)'][i]}"></i></div><b>${v.toFixed(2)} W</b></div>`).join('') + `<p class="note">Per die (4 channels). ADC ∝ 2^ENOB·fs; DSP ∝ N·fs.</p>`;
@@ -446,7 +475,7 @@ const pcbPanel: Builder = (store) => {
   return {
     el: root,
     update: (s) => {
-      const sys = evaluateSystem(systemInput(s.params));
+      const sys = solveSystem(s.params);
       const soc = (sys.adcPowerW + sys.dspPowerW) / 32 * 4 + 6;
       ro.set({ soc: fx(soc, 1), core: fx((soc * 0.7) / 0.8, 1), in: fx(soc / 0.9 / 12, 2) });
     },
