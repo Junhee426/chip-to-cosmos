@@ -166,6 +166,22 @@ export class ScaleManager {
     }
   }
 
+  /**
+   * Build (and pre-warm) specific levels ahead of a scripted sequence so its first
+   * visit does not stall. Only the named levels — never the whole project.
+   * A failure is not fatal: the level is retried when actually navigated to.
+   */
+  async preload(ids: LevelId[]): Promise<void> {
+    for (const id of ids) {
+      if (this.levels.has(id)) continue;
+      try {
+        await this.ensure(id);
+      } catch (e) {
+        console.warn(`preload of ${id} failed`, e);
+      }
+    }
+  }
+
   /** Destination of the step in flight (null when idle). */
   private stepTo: LevelId | null = null;
 

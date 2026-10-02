@@ -173,7 +173,18 @@ export class ArrayLevel extends BaseLevel {
     return { n: p.arrayN, spacingLambda: p.spacingLambda, steerThetaDeg: p.steerDeg, steerPhiDeg: p.steerAzDeg, weighting: p.weighting };
   }
 
+  /** CPU time of the last geometry rebuild (surface + footprint), ms — for the perf harness */
+  lastApplyMs = 0;
+  applyCount = 0;
+
   private applyParams(state: AppState): void {
+    const t0 = performance.now();
+    this.applyParamsInner(state);
+    this.lastApplyMs = performance.now() - t0;
+    this.applyCount++;
+  }
+
+  private applyParamsInner(state: AppState): void {
     this.dirty = false;
     const sol = beamSolution(state.params);
     this.solution = sol;

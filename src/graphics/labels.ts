@@ -109,6 +109,12 @@ export class LabelLayer {
     }
   }
 
+  /** Presentation mode: only these callouts may show (null = all). */
+  private only: Set<string> | null = null;
+  setOnly(ids: Set<string> | null): void {
+    this.only = ids;
+  }
+
   setDimmed(ids: Set<string> | null): void {
     for (const it of this.items) it.el.classList.toggle('dim', ids !== null && !ids.has(it.id));
   }
@@ -116,9 +122,10 @@ export class LabelLayer {
   update(camera: THREE.Camera, w: number, h: number): void {
     this.svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
     this.host.style.opacity = String(this.opacity);
-    const active = this.items.filter((it) => it.group === this.activeGroup);
+    const only = this.only;
+    const active = this.items.filter((it) => it.group === this.activeGroup && (!only || only.has(it.id)));
     for (const it of this.items) {
-      if (it.group !== this.activeGroup || !this.enabled) this.hide(it);
+      if (it.group !== this.activeGroup || !this.enabled || (only && !only.has(it.id))) this.hide(it);
     }
     if (!this.enabled || !active.length) return;
     // density: keep the selected callout, then navigable/essential ones, then the rest

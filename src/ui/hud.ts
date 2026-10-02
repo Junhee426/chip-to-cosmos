@@ -295,14 +295,19 @@ export class Hud {
     if (c.has('selected') || c.has('level')) this.renderParts(s);
     if (c.has('selected') || c.has('level') || c.has('params')) this.renderSummary(s);
     if (c.has('level')) this.root.classList.remove('menu-open');
+    if (c.has('presentation') || c.has('init')) {
+      this.root.classList.toggle('presentation', s.presentation);
+      document.body.classList.toggle('presentation', s.presentation);
+      this.cb.layout();
+    }
     if (this.analysis && (c.has('params') || c.has('init'))) this.analysis.update(s, c);
     if (c.has('params') || c.has('init')) this.renderCoupling(s);
-    if (c.has('params') || c.has('init') || c.has('level')) this.renderCausal(s);
+    if (c.has('params') || c.has('init') || c.has('level') || c.has('presentation')) this.renderCausal(s);
   }
 
   /** PHASE → BEAM → FOOTPRINT → LINK with the current calculated values. */
   private renderCausal(s: AppState): void {
-    const show = this.demoOn || BEAM_LEVELS.has(s.level);
+    const show = this.demoOn || s.presentation || BEAM_LEVELS.has(s.level);
     this.causal.hidden = !show;
     this.root.classList.toggle('causal-on', show);
     if (!show) return;
@@ -335,6 +340,19 @@ export class Hud {
   }
 
   private demoEl: HTMLElement | null = null;
+
+  private posterTop: HTMLElement | null = null;
+  private posterBottom: HTMLElement | null = null;
+
+  /** Presentation-mode overlay (title, metrics, Try-it): part of the safe-viewport computation. */
+  mountPoster(top: HTMLElement, bottom: HTMLElement): void {
+    this.posterTop = top;
+    this.posterBottom = bottom;
+    this.root.append(top, bottom);
+    const ro = new ResizeObserver(() => this.cb.layout());
+    ro.observe(top);
+    ro.observe(bottom);
+  }
 
   /** The demo caption lives in the HUD so the safe viewport can keep the beam clear of it. */
   mountDemo(el: HTMLElement): void {
@@ -548,6 +566,14 @@ export class Hud {
     const causal = this.causal.hidden ? null : this.causal.getBoundingClientRect();
     const demo = this.demoOn && this.demoEl ? this.demoEl.getBoundingClientRect() : null;
     const top = { bottom: Math.max(topBar.bottom, causal && causal.height ? causal.bottom : 0, demo && demo.height ? demo.bottom : 0) };
+    if (this.store.get().presentation) {
+      // presentation: no rail, panel or coupling — only title/causal/caption on top and the poster bar
+      const r = (e: HTMLElement | null) => (e && !e.hidden ? e.getBoundingClientRect() : null);
+      const title = r(this.posterTop?.querySelector<HTMLElement>('.pst-thesis') ?? null);
+      const pb = r(this.posterBottom);
+      const topEdge = Math.max(causal && causal.height ? causal.bottom : 0, demo && demo.height ? demo.bottom : 0, title && title.height ? title.bottom : 0);
+      return { top: topEdge + 8, right: 16, bottom: pb && pb.height ? H - pb.top + 8 : 16, left: 16 };
+    }
     const panel = this.panel.getBoundingClientRect();
     if (this.mobile) {
       // landscape phones: the sheet docks to the right edge instead of covering the bottom

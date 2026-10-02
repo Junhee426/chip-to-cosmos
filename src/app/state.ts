@@ -47,6 +47,10 @@ export interface AppState {
   selected: string | null;
   theoryTab: TheoryTab;
   labels: boolean;
+  /** screenshot-first presentation: app chrome hidden, poster overlay shown */
+  presentation: boolean;
+  /** link-budget X-ray: hardware/propagation element to emphasise in 3D (null = none) */
+  emphasis: string | null;
   params: Params;
 }
 
@@ -190,6 +194,8 @@ export function createStore(): Store {
     selected: null,
     theoryTab: 'intuition',
     labels: true,
+    presentation: false,
+    emphasis: null,
     params: { ...DEFAULT_PARAMS },
   });
 }

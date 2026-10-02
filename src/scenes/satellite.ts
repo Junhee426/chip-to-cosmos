@@ -16,6 +16,7 @@ import { wavelengthM } from '../models/units';
  *  spherical footprint and the altitude/radius ratio are geometrically exact. */
 const EARTH_R = 3000;
 const M_PER_KM = EARTH_R / EARTH_RADIUS_KM;
+const MAX_FP = 96;
 
 /**
  * LEVEL 1 — generic LEO broadband communication satellite (units: metres).
@@ -43,6 +44,15 @@ export class SatelliteLevel extends BaseLevel {
   private beamKey = '';
   private beamAxis!: THREE.Line;
   private beamCenter!: THREE.Mesh;
+  private beamFill!: THREE.Mesh;
+  private lobeRims!: THREE.LineSegments;
+  private lobeFill!: THREE.Mesh;
+  private edgeAnchor = new THREE.Object3D();
+  private terminalAnchor = new THREE.Object3D();
+  private lobeAnchor = new THREE.Object3D();
+  private footprintCentre = new THREE.Vector3();
+  private footprintRadius = 20;
+  private earthCentre = new THREE.Vector3();
   private subarray = new THREE.Group();
   private subPatches: THREE.InstancedMesh | null = null;
   private subKey = '';
@@ -126,7 +136,7 @@ export class SatelliteLevel extends BaseLevel {
       arrays.add(tile);
     }
     r.add(arrays);
-    this.addComponent({ id: 'phased-array', name: 'Phased Array', sub: 'Ka-band user beams', object: arrays, labelLocal: v3(0.55, -0.1, 0.6), desc: 'Electronically steered planar arrays forming many narrow user beams. Each element has its own phase shifter and amplifier (see BEAM LAB).', specs: ['2 × 1216 elements (illustrative)', 'Element spacing ≈ λ/2 @ 19.7 GHz', 'Scan ±60°'], child: 'array' });
+    this.addComponent({ id: 'phased-array', name: 'Phased Array', sub: 'Earth-facing · nadir deck', object: arrays, labelLocal: v3(0.55, -0.1, 0.6), desc: 'Electronically steered planar arrays forming many narrow user beams. Each element has its own phase shifter and amplifier (see BEAM LAB).', specs: ['2 × 1216 elements (illustrative)', 'Element spacing ≈ λ/2 @ 19.7 GHz', 'Scan ±60° electronically — the panel never moves'], child: 'array' });
 
     // ---------- Radiator (zenith) ----------
     const rad = new THREE.Group();
@@ -265,7 +275,7 @@ export class SatelliteLevel extends BaseLevel {
 
     // ---------- Engineering modes ----------
     this.modeFocus = {
-      signal: ['phased-array', 'payload', 'obc', 'user-beam'],
+      signal: ['phased-array', 'payload', 'obc', 'user-beam', 'service-area', 'terminal', 'grating-area'],
       power: ['solar', 'pcdu', 'battery', 'payload', 'obc'],
       thermal: ['payload', 'obc', 'radiator', 'pcdu', 'bus'],
       radiation: ['obc', 'payload', 'pcdu', 'bus'],
@@ -284,15 +294,23 @@ export class SatelliteLevel extends BaseLevel {
     for (let i = 0; i < 5; i++) this.addFlow('thermal', new FlowPath([v3(-0.9 + i * 0.45, 0.65, -0.3 + (i % 2) * 0.5), v3(-0.9 + i * 0.45, 2.4, -0.3 + (i % 2) * 0.5)], { color: '#ff9a6a', count: 8, size: 0.06, speed: 0.35 }));
 
     // ---------- User beam (SIGNAL mode): the shared BeamSolution on the scaled spherical Earth ----------
-    this.beamCone = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color: COLORS.signal, transparent: true, opacity: 0.1, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }));
-    this.beamRim = new THREE.LineLoop(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: '#e8f6ff', transparent: true, opacity: 0.95 }));
-    this.beamAxis = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.6 }));
-    this.beamCenter = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), new THREE.MeshBasicMaterial({ color: '#ffffff' }));
-    this.beam.add(this.beamCone, this.beamRim, this.beamAxis, this.beamCenter, this.beamAnchor);
+    // Main beam: solid edge, brighter fill. Grating lobes: dashed edge, dim fill (never colour alone).
+    this.beamCone = new THREE.Mesh(posBuffer(MAX_FP * 3), new THREE.MeshBasicMaterial({ color: COLORS.signal, transparent: true, opacity: 0.1, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }));
+    this.beamRim = new THREE.LineLoop(posBuffer(MAX_FP), new THREE.LineBasicMaterial({ color: '#e8f6ff', transparent: true, opacity: 0.95 }));
+    this.beamFill = new THREE.Mesh(posBuffer(MAX_FP * 3), new THREE.MeshBasicMaterial({ color: COLORS.signal, transparent: true, opacity: 0.32, side: THREE.DoubleSide, depthWrite: false }));
+    this.beamAxis = new THREE.Line(posBuffer(2), new THREE.LineBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.6 }));
+    this.beamCenter = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 10), new THREE.MeshBasicMaterial({ color: '#ffd28a' }));
+    const lobeMat = new THREE.LineDashedMaterial({ color: '#f0b44c', dashSize: 3, gapSize: 2.2, transparent: true, opacity: 0.9 });
+    this.lobeRims = new THREE.LineSegments(posBuffer(4 * 2 * 48 + 16), lobeMat);
+    this.lobeFill = new THREE.Mesh(posBuffer(4 * 48 * 3), new THREE.MeshBasicMaterial({ color: '#f0b44c', transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false }));
+    this.beam.add(this.beamCone, this.beamFill, this.beamRim, this.beamAxis, this.beamCenter, this.lobeRims, this.lobeFill, this.beamAnchor, this.edgeAnchor, this.terminalAnchor, this.lobeAnchor);
     this.beam.userData.noFade = true;
     this.beam.visible = false;
     r.add(this.beam);
-    this.addComponent({ id: 'user-beam', name: 'User Beam', sub: '−3 dB footprint · spherical Earth', object: this.beamAnchor, desc: 'The phased-array user beam. Its edge is the −3 dB contour of the same array factor used in BEAM LAB, carried from the array frame to the spacecraft frame and intersected with the Earth (shown uniformly scaled: radius and altitude keep their true ratio).', specs: ['From arrayN, spacing, steering, taper', 'Spherical-Earth intersection'], label: true });
+    this.addComponent({ id: 'user-beam', name: 'Main Beam', sub: 'electronically steered · calculated', object: this.beamAnchor, desc: 'The phased-array user beam. Its edge is the −3 dB contour of the same array factor used in BEAM LAB, carried from the array frame to the spacecraft frame and intersected with the Earth (shown uniformly scaled: radius and altitude keep their true ratio). Steering changes element phases; the panel itself never moves.', specs: ['From arrayN, spacing, steering, taper', 'Spherical-Earth intersection'], essential: true });
+    this.addComponent({ id: 'service-area', name: '−3 dB Service Area', sub: 'edge of beam · primary service area', object: this.edgeAnchor, desc: 'Ground area inside the −3 dB contour of the main beam: within 3 dB of the peak gain. Calculated by ray–sphere intersection of the contour directions.', specs: ['Calculated', 'Spherical Earth, no terrain'] });
+    this.addComponent({ id: 'terminal', name: 'Ground Terminal', sub: 'beam centre · link target', object: this.terminalAnchor, desc: 'User terminal at the beam centre. Its elevation and slant range are the ones the link budget uses.', specs: ['Link target = beam centre'] });
+    this.addComponent({ id: 'grating-area', name: 'Grating Lobe', sub: 'unintended illumination', object: this.lobeAnchor, desc: 'A grating lobe that reaches the Earth: a second, unintended area receives the signal (dashed amber). Only drawn when the model finds a lobe ≥ −10 dB whose maximum intersects the Earth.', specs: ['Calculated lobe direction and −3 dB contour'], essential: true });
 
     // BEAM LAB sub-array on the radiating face: same N, spacing and phase colours (SIGNAL mode)
     this.subarray.position.copy(this.arrayTile);
@@ -328,11 +346,11 @@ export class SatelliteLevel extends BaseLevel {
     if (this.beamCone) this.updateBeam(this.ctx.store.get());
   }
 
-  onState(state: AppState, changed: Set<string>): void {
-    if (changed.has('params') || changed.has('mode')) {
-      this.applyHeat(state);
-      this.updateBeam(state);
-    }
+  /** Parameter changes are applied once per rendered frame (tick), never per input event. */
+  private stateDirty = false;
+
+  onState(_state: AppState, changed: Set<string>): void {
+    if (changed.has('params') || changed.has('mode')) this.stateDirty = true;
   }
 
   /**
@@ -348,29 +366,57 @@ export class SatelliteLevel extends BaseLevel {
     const sol = beamSolution(p);
     const earthY = -(EARTH_RADIUS_KM + p.altitudeKm) * M_PER_KM;
     this.earth.group.position.y = earthY;
-    const toScene = (g: [number, number, number]) => v3(g[0] * M_PER_KM, earthY + g[1] * M_PER_KM, g[2] * M_PER_KM);
+    this.earthCentre.set(0, earthY, 0);
+    // on the scaled sphere, lifted ~4.5 m so lines never z-fight the surface
+    const toScene = (g: [number, number, number], lift = 1.0015) => v3(g[0] * M_PER_KM * lift, earthY + g[1] * M_PER_KM * lift, g[2] * M_PER_KM * lift);
     const apex = this.arrayTile.clone();
-    const rim = sol.footprint.contour.map(toScene);
+    const rim = sol.footprint.contour.map((g) => toScene(g));
     this.updateSubarray(state);
-    if (rim.length < 3) {
-      this.beamRim.visible = this.beamCone.visible = false;
-    } else {
-      this.beamRim.visible = this.beamCone.visible = true;
-      this.beamRim.geometry.dispose();
-      this.beamRim.geometry = new THREE.BufferGeometry().setFromPoints(rim);
-      const tri: THREE.Vector3[] = [];
-      rim.forEach((q, i) => tri.push(apex, q, rim[(i + 1) % rim.length]));
-      this.beamCone.geometry.dispose();
-      this.beamCone.geometry = new THREE.BufferGeometry().setFromPoints(tri);
-    }
+    const ok = rim.length >= 3;
     const c = sol.footprint.center;
-    const end = c ? toScene(c) : apex.clone().addScaledVector(v3(...arrayDirToBody(sol.pattern.axis)), 120);
-    this.beamAxis.geometry.dispose();
-    this.beamAxis.geometry = new THREE.BufferGeometry().setFromPoints([apex, end]);
+    const centre = c ? toScene(c) : ok ? rim.reduce((a2, q) => a2.add(q), v3(0, 0, 0)).divideScalar(rim.length) : apex.clone().addScaledVector(v3(...arrayDirToBody(sol.pattern.axis)), 120);
+    writeBuffer(this.beamRim.geometry, ok ? rim : []);
+    const cone: THREE.Vector3[] = [];
+    const fill: THREE.Vector3[] = [];
+    if (ok) rim.forEach((q, i) => {
+      const n = rim[(i + 1) % rim.length];
+      cone.push(apex, q, n);
+      fill.push(centre, q, n);
+    });
+    writeBuffer(this.beamCone.geometry, cone);
+    writeBuffer(this.beamFill.geometry, fill);
+    writeBuffer(this.beamAxis.geometry, [apex, centre]);
     this.beamCenter.visible = !!c;
-    this.beamCenter.position.copy(end);
-    this.beamCenter.scale.setScalar(Math.max(1.2, (sol.footprint.alongTrackKm || 10) * M_PER_KM * 0.05));
-    this.beamAnchor.position.copy(c ? end : apex.clone().addScaledVector(v3(...arrayDirToBody(sol.pattern.axis)), 40));
+    this.beamCenter.position.copy(centre);
+    this.footprintCentre.copy(centre);
+    this.footprintRadius = ok ? Math.max(...rim.map((q) => q.distanceTo(centre))) : 20;
+    this.beamCenter.scale.setScalar(Math.max(1.2, this.footprintRadius * 0.08));
+    this.terminalAnchor.position.copy(centre);
+    this.terminalAnchor.visible = !!c;
+    this.beamAnchor.position.copy(apex).lerp(centre, 0.42);
+    // label the service area at the contour point closest to the camera side (+Z), i.e. a visible edge
+    if (ok) this.edgeAnchor.position.copy(rim.reduce((a2, q) => (q.z > a2.z ? q : a2)));
+    this.edgeAnchor.visible = ok;
+    // grating lobes that reach the Earth: dashed rims + dashed rays, dim fill
+    const segs: THREE.Vector3[] = [];
+    const lfill: THREE.Vector3[] = [];
+    for (const s2 of sol.secondary.slice(0, 4)) {
+      const lr = s2.earth.contour.map((g) => toScene(g));
+      if (lr.length < 3) continue;
+      const lc = s2.earth.center ? toScene(s2.earth.center) : lr[0];
+      lr.forEach((q, i) => {
+        const n = lr[(i + 1) % lr.length];
+        segs.push(q, n);
+        lfill.push(lc, q, n);
+      });
+      for (let e = 0; e < 4; e++) segs.push(apex, lr[Math.floor((e * lr.length) / 4)]);
+    }
+    writeBuffer(this.lobeRims.geometry, segs);
+    this.lobeRims.computeLineDistances();
+    writeBuffer(this.lobeFill.geometry, lfill);
+    const s0 = sol.secondary[0];
+    this.lobeAnchor.visible = !!s0;
+    if (s0?.earth.center) this.lobeAnchor.position.copy(toScene(s0.earth.center));
   }
 
   /** The sub-array that BEAM LAB opens into: real element count, spacing and phase colours. */
@@ -400,10 +446,24 @@ export class SatelliteLevel extends BaseLevel {
     this.subPatches!.instanceColor!.needsUpdate = true;
   }
 
+  /**
+   * Camera poses for demos and the poster — defined once, here, from the scene geometry.
+   * 'earth-facing' and 'poster' look across the ground track from slightly above, so the
+   * nadir deck, the aperture, the beam and the footprint on the curved Earth read together.
+   */
   demoView(stage: string): { pos: THREE.Vector3; target: THREE.Vector3 } | null {
-    if (stage === 'satellite') return { pos: v3(-5.6, -1.6, 6.4), target: v3(0.2, -0.45, 0.2) };
-    if (stage === 'array-focus') return { pos: this.arrayTile.clone().add(v3(-0.2, -0.32, 0.26)), target: this.arrayTile.clone() };
-    return null;
+    switch (stage) {
+      case 'satellite':
+        return { pos: v3(-5.6, -1.6, 6.4), target: v3(0.2, -0.45, 0.2) };
+      case 'array-focus':
+        return { pos: this.arrayTile.clone().add(v3(-0.2, -0.32, 0.26)), target: this.arrayTile.clone() };
+      case 'opening':
+      case 'earth-facing':
+        // just below the nadir deck, looking slightly down: the aperture faces the Earth limb below
+        return { pos: v3(-9, -3.2, 21), target: v3(0.3, -6, 0) };
+      default:
+        return null;
+    }
   }
 
   private applyHeat(state = this.ctx.store.get()): void {
@@ -419,6 +479,12 @@ export class SatelliteLevel extends BaseLevel {
   }
 
   protected tick(dt: number): void {
+    if (this.stateDirty) {
+      this.stateDirty = false;
+      const st = this.ctx.store.get();
+      this.applyHeat(st);
+      this.updateBeam(st);
+    }
     this.beam.visible = this.mode === 'signal' && this.alpha > 0.5;
     this.subarray.visible = this.mode === 'signal';
     this.earth.update(this.time);
@@ -431,4 +497,20 @@ export class SatelliteLevel extends BaseLevel {
     for (const w of this.wings) w.rotation.z = sunTrack;
     (this.plume.material as THREE.MeshBasicMaterial).opacity = (this.mode === 'power' || this.mode === 'structure' ? 0.3 : 0.08) * (this.decorative ? 0.85 + 0.15 * Math.sin(this.time * 30) : 0.92) * this.alpha;
   }
+}
+
+/** Fixed-capacity position buffer, rewritten in place (no per-update allocation). */
+function posBuffer(capacity: number): THREE.BufferGeometry {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(capacity * 3), 3).setUsage(THREE.DynamicDrawUsage));
+  g.setDrawRange(0, 0);
+  return g;
+}
+function writeBuffer(g: THREE.BufferGeometry, pts: THREE.Vector3[]): void {
+  const a = g.getAttribute('position') as THREE.BufferAttribute;
+  const n = Math.min(pts.length, a.count);
+  for (let i = 0; i < n; i++) a.setXYZ(i, pts[i].x, pts[i].y, pts[i].z);
+  a.needsUpdate = true;
+  g.setDrawRange(0, n);
+  g.computeBoundingSphere();
 }

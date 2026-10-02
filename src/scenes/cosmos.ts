@@ -17,6 +17,9 @@ const S = RE / RE_KM;
 /** footprint drawn slightly above the surface (≈ 6 km) to avoid z-fighting */
 const LIFT = 1.001;
 const MAX_FP = 96;
+/** poster pose relative to the satellite–footprint midpoint, scene units (Re = 10) */
+const POSTER_POSE = { side: 1.5, up: 0.62, along: -0.45, lift: 0.08 };
+const POSTER_HERO_SCALE = 1.9;
 
 interface Shell {
   planes: number;
@@ -79,6 +82,7 @@ export class CosmosLevel extends BaseLevel {
   private fpCenter!: THREE.Mesh;
   private fpLabel = new THREE.Object3D();
   private fpSecondary!: THREE.LineSegments;
+  private fpLobeLabel = new THREE.Object3D();
   private fpKey = '';
   private heroBasis = new THREE.Matrix4();
   private heroVel = new THREE.Vector3();
@@ -154,11 +158,16 @@ export class CosmosLevel extends BaseLevel {
     this.hero = new THREE.Group();
     const heroBody = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.018, 0.02), mat.mli('gold'));
     const heroWing = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.002, 0.16), mat.solarCell());
-    this.hero.add(heroBody, heroWing);
+    // Earth-facing phased-array aperture on the nadir deck (local −Y = toward the Earth centre)
+    const aperture = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.0016, 0.015), new THREE.MeshStandardMaterial({ color: '#0d1b2a', emissive: new THREE.Color(COLORS.signal), emissiveIntensity: 0.55, metalness: 0.3, roughness: 0.5 }));
+    aperture.position.y = -0.0098;
+    const apEdge = new THREE.LineSegments(new THREE.EdgesGeometry(aperture.geometry), new THREE.LineBasicMaterial({ color: '#cfe9ff' }));
+    apEdge.position.copy(aperture.position);
+    this.hero.add(heroBody, heroWing, aperture, apEdge);
     this.heroRing = new THREE.Mesh(new THREE.RingGeometry(0.12, 0.13, 64), new THREE.MeshBasicMaterial({ color: '#e8f1ff', transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false }));
     this.hero.add(this.heroRing);
     this.root.add(this.hero);
-    this.addComponent({ id: 'hero', name: 'LEO-BB-01', sub: '550 km · 53° · click to enter', object: this.hero, desc: 'The satellite followed through every scale of this visualization.', specs: ['Altitude 550 km, inclination 53°', 'v ≈ 7.6 km/s', 'Enter to see the spacecraft'], child: 'satellite' });
+    this.addComponent({ id: 'hero', name: 'LEO-BB-01', sub: 'Earth-facing phased array · enter ›', object: this.hero, desc: 'The satellite followed through every scale of this visualization.', specs: ['Altitude 550 km, inclination 53°', 'v ≈ 7.6 km/s', 'Enter to see the spacecraft'], child: 'satellite' });
 
     // --- −3 dB footprint on the spherical Earth (shared BeamSolution) ---
     const fillGeo = new THREE.BufferGeometry();
@@ -166,20 +175,22 @@ export class CosmosLevel extends BaseLevel {
     this.fpFill = new THREE.Mesh(fillGeo, new THREE.MeshBasicMaterial({ color: COLORS.signal, transparent: true, opacity: 0.28, side: THREE.DoubleSide, depthWrite: false }));
     this.fpLine = new THREE.LineLoop(posBuffer(MAX_FP), new THREE.LineBasicMaterial({ color: '#e8f6ff' }));
     this.fpRays = new THREE.LineSegments(posBuffer(18), new THREE.LineBasicMaterial({ color: COLORS.signal, transparent: true, opacity: 0.55, depthWrite: false }));
-    this.fpSecondary = new THREE.LineSegments(posBuffer(4 * 2 * 64 + 8), new THREE.LineBasicMaterial({ color: '#f0b44c' }));
+    this.fpSecondary = new THREE.LineSegments(posBuffer(4 * 2 * 64 + 8), new THREE.LineDashedMaterial({ color: '#f0b44c', dashSize: 0.012, gapSize: 0.008, transparent: true, opacity: 0.85 }));
     this.fpCenter = new THREE.Mesh(new THREE.SphereGeometry(0.0025, 12, 8), mat.emissive('#ffffff', 0.9));
-    this.fp.add(this.fpFill, this.fpLine, this.fpRays, this.fpSecondary, this.fpCenter, this.fpLabel);
+    this.fp.add(this.fpFill, this.fpLine, this.fpRays, this.fpSecondary, this.fpCenter, this.fpLabel, this.fpLobeLabel);
     this.fp.matrixAutoUpdate = false;
     this.root.add(this.fp);
-    this.addComponent({ id: 'footprint', name: 'Beam Footprint', sub: '−3 dB · spherical Earth', object: this.fpLabel, desc: 'The −3 dB contour of the BEAM LAB array pattern, carried array → spacecraft → Earth frame and intersected with the spherical Earth. Steering moves it; array size and taper resize it. Amber contours are grating-lobe footprints (only when the model finds a lobe that reaches the ground).', specs: ['Same array factor as BEAM LAB', 'Ray–sphere intersection per contour direction'], essential: true });
+    this.addComponent({ id: 'grating-area', name: 'Grating Lobe', sub: 'unintended illumination', object: this.fpLobeLabel, desc: 'Footprint of a grating lobe (dashed): a second area on the ground that receives the signal although the beam was steered elsewhere. Only drawn when the model finds a lobe ≥ −10 dB that intersects the Earth.', specs: ['Calculated lobe direction and contour'], essential: true });
+    this.addComponent({ id: 'footprint', name: '−3 dB Service Area', sub: 'main beam · spherical Earth', object: this.fpLabel, desc: 'The −3 dB contour of the BEAM LAB array pattern, carried array → spacecraft → Earth frame and intersected with the spherical Earth. Steering moves it; array size and taper resize it. Amber contours are grating-lobe footprints (only when the model finds a lobe that reaches the ground).', specs: ['Same array factor as BEAM LAB', 'Ray–sphere intersection per contour direction'], essential: true });
 
     // --- user terminal, downlink, coverage ---
     this.user = new THREE.Group();
     this.user.add(new THREE.Mesh(new THREE.SphereGeometry(0.06, 16, 8), mat.emissive('#ffd28a', 1.4)));
     this.root.add(this.user);
-    this.addComponent({ id: 'user', name: 'User Terminal', sub: 'at the beam centre', object: this.user, desc: 'Flat-panel user terminal placed at the centre of the calculated footprint. Its elevation angle and slant range come from that geometry and feed the link budget, so the drawn link and the numbers are the same link.', specs: ['Rx noise temperature 250 K', 'Rx gain from link settings'] });
+    this.addComponent({ id: 'user', name: 'Ground Terminal', sub: 'beam centre · link target', object: this.user, desc: 'Flat-panel user terminal placed at the centre of the calculated footprint. Its elevation angle and slant range come from that geometry and feed the link budget, so the drawn link and the numbers are the same link.', specs: ['Rx noise temperature 250 K', 'Rx gain from link settings'] });
     this.beam = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 1, 8, 1, true), mat.emissive(COLORS.signal, 1.5, 0.7));
     this.root.add(this.beam);
+    this.addComponent({ id: 'downlink', name: 'Downlink path', sub: 'free-space propagation', object: this.beam, desc: 'Line of sight from the satellite to the user terminal at the beam centre; its length is the slant range that sets the free-space path loss.', label: false });
     this.beamFlow = this.addFlow('signal', new FlowPath([v3(0, 0, 0), v3(0, 1, 0)], { color: COLORS.signal, count: 18, size: 0.05, speed: 0.6 }));
     this.coverage = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: '#8fb8e8', transparent: true, opacity: 0.45 }));
     this.root.add(this.coverage);
@@ -213,7 +224,7 @@ export class CosmosLevel extends BaseLevel {
       }
     });
     this.modeFocus = {
-      signal: ['constellation', 'hero', 'user', 'footprint'],
+      signal: ['constellation', 'hero', 'user', 'footprint', 'downlink', 'grating-area'],
       power: ['earth', 'hero'],
       thermal: ['earth', 'hero'],
       radiation: ['belts', 'hero', 'earth'],
@@ -222,6 +233,7 @@ export class CosmosLevel extends BaseLevel {
   }
 
   protected onModeChanged(mode: EngMode): void {
+    this.poster = this.ctx.store.get().presentation;
     if (!this.belts) return;
     this.belts.userData.hidden = mode !== 'radiation';
     (this.isl.material as THREE.LineBasicMaterial).opacity = mode === 'signal' ? 0.45 : 0.08;
@@ -240,7 +252,10 @@ export class CosmosLevel extends BaseLevel {
   }
 
   onState(state: AppState, changed: Set<string>): void {
-    if (['params.arrayN', 'params.spacingLambda', 'params.steerDeg', 'params.steerAzDeg', 'params.weighting', 'params.altitudeKm', 'params.freqGHz'].some((k) => changed.has(k))) this.updateFootprint(state);
+    if (changed.has('presentation')) this.poster = state.presentation;
+    // applied once per rendered frame in tick (a drag never runs the model per input event)
+    if (['params.arrayN', 'params.spacingLambda', 'params.steerDeg', 'params.steerAzDeg', 'params.weighting', 'params.altitudeKm', 'params.freqGHz'].some((k) => changed.has(k))) this.fpDirty = true;
+    void state;
   }
 
   private updateOrbits(): void {
@@ -330,6 +345,10 @@ export class CosmosLevel extends BaseLevel {
         if (s2.earth.center) sec.push(sat, lift(s2.earth.center));
       }
       writeLine(this.fpSecondary.geometry, sec);
+      this.fpSecondary.computeLineDistances();
+      const s0 = sol.secondary[0];
+      this.fpLobeLabel.visible = !!s0?.earth.center;
+      if (s0?.earth.center) this.fpLobeLabel.position.copy(lift(s0.earth.center));
       this.fpCenter.visible = !!centre;
       if (centre) this.fpCenter.position.copy(centre);
       this.fpLabel.position.copy(centre ?? (ok ? pts[0] : sat));
@@ -378,14 +397,31 @@ export class CosmosLevel extends BaseLevel {
     const rootScale = this.root.getWorldScale(this.tmpA).x || 1;
     const d = cam.getWorldPosition(this.tmpA).distanceTo(this.hero.getWorldPosition(this.tmpB)) / rootScale;
     const k = THREE.MathUtils.clamp(d / 8, 0.04, 1);
-    this.hero.scale.setScalar(k);
+    // poster: the hero is shown at a fixed enlargement so its Earth-facing aperture reads (illustrative size)
+    this.hero.scale.setScalar(this.poster ? POSTER_HERO_SCALE : k);
     this.user.scale.setScalar(k);
     this.fpCenter.scale.setScalar(Math.max(k, 0.3));
     this.beam.scale.x = this.beam.scale.z = k;
   }
 
-  /** Hero-demo framings: close over the hero satellite with the footprint below. */
+  private poster = false;
+
+  /**
+   * Hero-demo framings. 'poster' is the project's signature frame: the satellite (Earth-facing
+   * aperture), its beam and the −3 dB footprint on the curved Earth, with the limb and space above.
+   */
   demoView(stage: string): { pos: THREE.Vector3; target: THREE.Vector3 } | null {
+    if (stage === 'poster') {
+      this.updateOrbits();
+      const up = this.heroPos.clone().normalize();
+      const along = this.heroVel.clone();
+      const side = new THREE.Vector3().crossVectors(along, up).normalize();
+      const ground = this.fpLabel.position.clone().applyMatrix4(this.heroBasis);
+      const mid = ground.clone().lerp(this.heroPos, 0.5);
+      const aspect = (this.ctx.camera as THREE.PerspectiveCamera | undefined)?.aspect ?? 1.6;
+      const k = Math.min(2.2, Math.max(1, 1.25 / aspect));
+      return { pos: mid.clone().addScaledVector(side, POSTER_POSE.side * k).addScaledVector(up, POSTER_POSE.up * k).addScaledVector(along, POSTER_POSE.along * k), target: mid.addScaledVector(up, POSTER_POSE.lift) };
+    }
     if (stage !== 'earth-footprint' && stage !== 'link') return null;
     this.updateOrbits();
     const up = this.heroPos.clone().normalize();
@@ -404,22 +440,32 @@ export class CosmosLevel extends BaseLevel {
     return { pos: mid.clone().addScaledVector(side, 1.15 * k).addScaledVector(up, 0.42 * k).addScaledVector(along, -0.2 * k), target: mid };
   }
 
+  /** Reproducible poster: back to the reference orbit position. */
+  resetOrbit(): void {
+    this.orbitT = 0;
+    this.updateOrbits();
+  }
+
   /** Freeze/resume orbital motion (hero demo framing). */
   set orbitPaused(v: boolean) {
     this.paused = v;
   }
   private paused = false;
 
+  private fpDirty = false;
+
   protected tick(dt: number, state: AppState): void {
     this.earth.update(this.time);
     if (this.active && !this.paused) {
       this.orbitT += dt;
       this.updateOrbits();
-    }
+    } else if (this.fpDirty) this.updateFootprint(state);
+    this.fpDirty = false;
     syncPointScale(this.glow);
     this.scaleMarkers();
     const s = this.decorative ? 1 + 0.12 * Math.sin(this.time * 3) : 1;
     this.heroRing.scale.setScalar(s);
+    this.heroRing.visible = !this.poster; // the selection ring would dominate the enlarged poster marker
     this.heroRing.lookAt(this.hero.position.clone().multiplyScalar(2));
     void state;
   }
