@@ -161,3 +161,66 @@ narrow middle strip (6 / 5 overlaps) and `.part` buttons were under 44 px. Fixed
 (`placeCoupling()` docks the strip into the inspector when the free middle width is < 620 px) and
 `src/styles/main.css` (coarse pointer: hide the mouse hint, `.part` min-width 44 px); the rows above
 are the re-run after the fix (tablets and desktops re-measured).
+
+# V3 measurements — hero beam demo (2026-10-02)
+
+Harness: `node scripts/hero.mjs <url> <out> [--only=visual,smoke,perf,mobile]`. Same container as
+above: headless Chromium, **SwiftShader (CPU) rendering, no GPU**, 4 vCPU. Frame times below are a
+property of this CPU rasteriser — they are **not** GPU, phone or Surface frame rates and must not be
+read as FPS. Resource counts, state checks and layout are renderer-independent.
+
+## Model cost (Node, same machine)
+
+One `evaluateSystem()` (includes `solveBeam()`: directivity integration 90 × 120, contour trace,
+spherical + flat footprints, grating-lobe search), mean of 5:
+
+| Case | ms |
+|---|---|
+| 8×8 | 9.9 |
+| 16×16 | 13.1 |
+| 32×32 | 25.3 |
+| 16×16, d = 1.0λ, θ₀ = 25° (grating lobe + secondary footprint) | 16.6 |
+| 32×32 Hann | 29.0 |
+
+Memoisation (`solveSystem`) runs this once per parameter change for every consumer.
+
+## Repeated hero demo — 3 runs, 1280 × 800, balanced (SwiftShader)
+
+| Run | Wall s | Frames | avg ms | p95 ms | p99 ms | max ms | frames > 66.7 ms | geometries | textures | programs |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 234.6 | 155 | 1482 | 3000 | 7100 | 10266 | 147 | 108 | 23 | 67 |
+| 2 | 222.7 | 153 | 1445 | 2933 | 3233 | 7150 | 149 | 108 | 23 | 67 |
+| 3 | 230.2 | 157 | 1461 | 2950 | 7366 | 8466 | 151 | 108 | 23 | 67 |
+
+- **No GPU-resource growth** across repeated runs (geometries 108, textures 23, programs 67 after
+  every run).
+- Wall time ≫ the designed ~25 s because SwiftShader frames take ~1.5 s and the render loop clamps
+  `dt` to 0.1 s, so time-based flights advance at most 0.1 s per frame. On a GPU at ≥ 30 FPS the
+  flights run at their designed duration; that has **not** been measured here.
+
+## Steering drag in BEAM LAB (80 store writes at 16 ms, SwiftShader)
+
+3 frames rendered over the drag (p95 = max ≈ 1.6 s): parameter writes were coalesced to one model
+evaluation and one geometry rebuild per rendered frame. GPU frame times for dragging are not measured.
+
+## Browser smoke checks (SwiftShader) — 13/13 passed
+
+Steering changes the phase gradient (βx 0 → −1.57 rad), tilts the axis and moves the footprint
+(+320 km along-track); BEAM LAB draws the same `BeamSolution` object the HUD reads; causal strip
+shows the solution footprint; 16→32 elements: HPBW 7.6 → 4.0°, area 5609 → 1399 km²; Earth contour
+drawn in COSMOS (72 points); `Esc` skips; navigation works after skip; a navigation request during a
+replay ends the demo; reduced motion: no intro autoplay, motionScale 0.35, demo completes; grating
+preset → 1 lobe with 1 secondary Earth footprint and the warning panel; demo ends at COSMOS.
+
+## Mobile hero journey — Chromium emulation (not real devices)
+
+Tap *▶ Demo* in the sheet → demo completes → BEAM LAB → *Experiment* → *Grating lobe* → *Back*.
+
+| Viewport | Demo button | Skip | End level | Grating lobe | Back | Targets < 44 px |
+|---|---|---|---|---|---|---|
+| 390 × 844 | 44 px | 44 px | cosmos | yes | satellite | 0 |
+| 430 × 932 | 44 px | 44 px | cosmos | yes | satellite | 0 |
+| 844 × 390 | 44 px | 44 px | cosmos | yes | satellite | 0 |
+
+The first 390 × 844 capture showed the Earth-footprint framing too tight in portrait; the framing
+now backs off with the aspect ratio (re-run above is after the fix).
