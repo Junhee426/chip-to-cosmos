@@ -2,11 +2,10 @@ import { LEVELS, MAIN_CHAIN, breadcrumb, depth, formatLength, type LevelId } fro
 import type { AppState, EngMode, Quality, Store } from '../app/state';
 import { LEVEL_KEY_PARAM } from './summary';
 import { MOBILE_LAYOUT_QUERY } from '../app/quality';
-import { systemInput } from '../app/system';
+import { beamSolution, solveSystem } from '../app/system';
 import { THEORY } from '../content/theory';
 import type { ModelMeta } from '../models/meta';
 import { SIGNAL_CHAIN } from '../models/rf';
-import { evaluateSystem } from '../models/system-model';
 import type { ComponentDef } from '../scenes/base';
 import { buildAnalysis, type Analysis } from './analysis';
 import { fx, h } from './dom';
@@ -20,7 +19,19 @@ export interface HudCallbacks {
   componentInfo: (id: string) => ComponentDef | null;
   /** components of the current level (for the keyboard/touch-reachable parts list) */
   components: () => ComponentDef[];
+  /** start the Satellite → Beam Lab → Earth footprint demo */
+  runBeamDemo: () => void;
 }
+
+export type CausalStage = 'phase' | 'beam' | 'footprint' | 'link';
+const CAUSAL: { id: CausalStage; label: string }[] = [
+  { id: 'phase', label: 'PHASE' },
+  { id: 'beam', label: 'BEAM' },
+  { id: 'footprint', label: 'FOOTPRINT' },
+  { id: 'link', label: 'LINK' },
+];
+/** levels where the beam chain is on screen */
+const BEAM_LEVELS = new Set<LevelId>(['satellite', 'array', 'cosmos']);
 
 const MODES: { id: EngMode; label: string; key: string }[] = [
   { id: 'structure', label: 'Structure', key: '1' },
@@ -67,6 +78,11 @@ export class Hud {
   private qualityNote!: HTMLElement;
   sheetExpanded = false;
   private mobile = false;
+  private causal!: HTMLElement;
+  private causalPrev = new Map<CausalStage, string>();
+  private causalStage: CausalStage | null = null;
+  private demoOn = false;
+  private pendingChanged: Set<string> | null = null;
 
   constructor(parent: HTMLElement, private store: Store, private cb: HudCallbacks) {
     this.root = h('div', 'hud');
@@ -87,9 +103,12 @@ export class Hud {
     this.labelsBtn.addEventListener('click', () => store.set({ labels: !store.get().labels }));
     const intro = h('button', 'tool-btn', '▶ Intro');
     intro.addEventListener('click', () => cb.replayIntro());
+    const demo = h('button', 'tool-btn demo-btn', '▶ Beam demo');
+    demo.setAttribute('aria-label', 'Run the beam demo: element phase to Earth footprint to link margin');
+    demo.addEventListener('click', () => cb.runBeamDemo());
     this.fps = h('span', 'fps');
     this.qualityNote = h('span', 'quality-note');
-    tools.append(this.fps, this.qualityNote, this.labelsBtn, this.quality, intro);
+    tools.append(this.fps, this.qualityNote, this.labelsBtn, this.quality, intro, demo);
     const back = h('button', 'icon-btn nav-back', '‹');
     back.setAttribute('aria-label', 'Zoom out to parent scale');
     back.addEventListener('click', () => cb.back());
@@ -183,15 +202,19 @@ export class Hud {
     this.scaleTag = h('div', 'scale-tag');
     scale.append(this.scaleBar, this.scaleText, this.scaleTag);
     this.coupling = h('div', 'coupling');
+    // causal strip: one beam state, four consequences
+    this.causal = h('ol', 'causal');
+    this.causal.setAttribute('aria-label', 'Beam causal chain');
+    this.causal.innerHTML = CAUSAL.map((c, i) => `${i ? '<li class="causal-arrow" aria-hidden="true">→</li>' : ''}<li class="causal-step" data-stage="${c.id}"><span>${c.label}</span><b></b></li>`).join('');
     const hint = h('div', 'hint', 'Drag to orbit · scroll to zoom · <b>double-click</b> a part to dive in · <b>Esc</b> to zoom out');
 
     this.perf = h('pre', 'perf-overlay');
     this.perf.hidden = true;
     this.toastEl = h('div', 'toast');
     this.toastEl.setAttribute('role', 'status');
-    this.root.append(top, rail, panel, scale, this.coupling, hint, this.perf, this.toastEl);
+    this.root.append(top, rail, panel, this.causal, scale, this.coupling, hint, this.perf, this.toastEl);
     const ro = new ResizeObserver(() => cb.layout());
-    for (const el of [top, rail, panel, this.coupling]) ro.observe(el);
+    for (const el of [top, rail, panel, this.coupling, this.causal]) ro.observe(el);
     const mq = window.matchMedia(MOBILE_LAYOUT_QUERY);
     const place = () => this.placeForViewport(mq.matches);
     mq.addEventListener('change', place);
@@ -217,6 +240,23 @@ export class Hud {
   }
 
   private onState(s: AppState, c: Set<string>): void {
+    // parameter drags fire many events per frame: panels, charts and strips update once per frame
+    if (c.has('params') && !c.has('init') && c.size === [...c].filter((k) => k.startsWith('params')).length) {
+      if (!this.pendingChanged) {
+        this.pendingChanged = new Set();
+        requestAnimationFrame(() => {
+          const changed = this.pendingChanged!;
+          this.pendingChanged = null;
+          this.onParams(this.store.get(), changed);
+        });
+      }
+      for (const k of c) this.pendingChanged.add(k);
+      return;
+    }
+    this.onParams(s, c);
+  }
+
+  private onParams(s: AppState, c: Set<string>): void {
     if (c.has('level') || c.has('transitioning')) {
       this.crumbs.innerHTML = '';
       breadcrumb(s.level).forEach((l, i, arr) => {
@@ -257,6 +297,59 @@ export class Hud {
     if (c.has('level')) this.root.classList.remove('menu-open');
     if (this.analysis && (c.has('params') || c.has('init'))) this.analysis.update(s, c);
     if (c.has('params') || c.has('init')) this.renderCoupling(s);
+    if (c.has('params') || c.has('init') || c.has('level')) this.renderCausal(s);
+  }
+
+  /** PHASE → BEAM → FOOTPRINT → LINK with the current calculated values. */
+  private renderCausal(s: AppState): void {
+    const show = this.demoOn || BEAM_LEVELS.has(s.level);
+    this.causal.hidden = !show;
+    this.root.classList.toggle('causal-on', show);
+    if (!show) return;
+    const b = beamSolution(s.params);
+    const f = b.footprint;
+    const vals: Record<CausalStage, string> = {
+      phase: `β ${((b.pattern.phaseStepX * 180) / Math.PI).toFixed(0)}°/el`,
+      beam: `${b.pattern.hpbwDeg.toFixed(1)}° · ${b.pattern.gainDbi.toFixed(1)} dBi`,
+      footprint: f.center ? `${Math.round(f.alongTrackKm)}×${Math.round(f.crossTrackKm)} km` : 'off Earth',
+      link: b.link ? `${b.link.marginDb >= 0 ? '+' : ''}${b.link.marginDb.toFixed(1)} dB` : 'no link',
+    };
+    for (const li of this.causal.querySelectorAll<HTMLElement>('.causal-step')) {
+      const id = li.dataset.stage as CausalStage;
+      const v = vals[id];
+      const el = li.querySelector('b')!;
+      if (el.textContent !== v) {
+        el.textContent = v;
+        if (this.causalPrev.has(id)) {
+          li.classList.remove('changed');
+          void li.offsetWidth;
+          li.classList.add('changed');
+        }
+        this.causalPrev.set(id, v);
+      }
+      li.classList.toggle('on', this.causalStage === id);
+      if (this.causalStage === id) li.setAttribute('aria-current', 'step');
+      else li.removeAttribute('aria-current');
+    }
+    this.causal.classList.toggle('warn', b.pattern.gratingLobe);
+  }
+
+  private demoEl: HTMLElement | null = null;
+
+  /** The demo caption lives in the HUD so the safe viewport can keep the beam clear of it. */
+  mountDemo(el: HTMLElement): void {
+    this.demoEl = el;
+    this.root.append(el);
+    new ResizeObserver(() => this.cb.layout()).observe(el);
+  }
+
+  /** Hero demo: highlight the current causal stage (null = none). */
+  setCausal(stage: CausalStage | null, demoRunning: boolean): void {
+    this.causalStage = stage;
+    this.demoOn = demoRunning;
+    this.root.classList.toggle('demo-on', demoRunning);
+    this.renderCausal(this.store.get());
+    this.cb.layout();
   }
 
   private buildPanel(s: AppState): void {
@@ -322,7 +415,7 @@ export class Hud {
     const key = JSON.stringify(p);
     if (key === this.couplingKey) return;
     this.couplingKey = key;
-    const sys = evaluateSystem(systemInput(p));
+    const sys = solveSystem(p);
     // what changed since the last parameter edit, and in which direction (calculated values only)
     const prev = this.couplingPrev;
     const next = new Map<string, number>();
@@ -349,11 +442,11 @@ export class Hud {
         pill('Array', `${p.arrayN}×${p.arrayN} · ${p.steerDeg}°`, 'array', p.arrayN * 1e3 + p.steerDeg + p.spacingLambda, 'Elements, spacing, steering and taper (input)'),
         pill('Gain', `${fx(sys.gainDbi, 1)} dBi`, undefined, sys.gainDbi, 'Directivity integrated from |AF·EP|² × 70 % efficiency'),
         pill('EIRP', `${fx(sys.eirpDbw, 1)} dBW`, undefined, sys.eirpDbw, 'EIRP = Pt + Gt'),
-        pill('Pr', `${fx(sys.link.rxPowerDbm, 1)} dBm`, 'cosmos', sys.link.rxPowerDbm, 'Pr = EIRP + Gr − FSPL − L'),
-        pill('Margin', `${sys.link.marginDb >= 0 ? '+' : ''}${fx(sys.link.marginDb, 1)} dB`, 'cosmos', sys.link.marginDb, 'Eb/N0 − required Eb/N0'),
+        pill('Pr', sys.link ? `${fx(sys.link.rxPowerDbm, 1)} dBm` : '—', 'cosmos', sys.link?.rxPowerDbm ?? NaN, 'Pr = EIRP + Gr − FSPL − L (user at the beam centre)'),
+        pill('Margin', sys.link ? `${sys.link.marginDb >= 0 ? '+' : ''}${fx(sys.link.marginDb, 1)} dB` : 'no link', 'cosmos', sys.link?.marginDb ?? NaN, 'Eb/N0 − required Eb/N0'),
       ].join(arrow)}</div>`;
     this.couplingPrev = next;
-    this.coupling.classList.toggle('neg', sys.link.marginDb < 0 || sys.powerMarginW < 0);
+    this.coupling.classList.toggle('neg', !sys.link || sys.link.marginDb < 0 || sys.powerMarginW < 0);
     for (const b of this.coupling.querySelectorAll<HTMLElement>('[data-go]')) b.addEventListener('click', () => this.cb.navigate(b.dataset.go as LevelId));
     this.coupling.classList.remove('flash');
     void this.coupling.offsetWidth;
@@ -419,7 +512,9 @@ export class Hud {
       <div class="sum-actions">
         ${child ? `<button class="sum-btn primary" data-act="enter" aria-label="Internal view: ${LEVELS[child].title}">Inside · ${LEVELS[child].crumb} ›</button>` : ''}
         <button class="sum-btn" data-act="experiment">Experiment</button>
+        ${BEAM_LEVELS.has(s.level) && !c ? '<button class="sum-btn" data-act="demo" aria-label="Run the beam demo">▶ Demo</button>' : ''}
       </div>`;
+    this.summary.querySelector('[data-act="demo"]')?.addEventListener('click', () => this.cb.runBeamDemo());
     this.summary.querySelector('[data-act="enter"]')?.addEventListener('click', () => child && this.cb.navigate(child));
     this.summary.querySelector('[data-act="experiment"]')?.addEventListener('click', () => this.setSheet(true, true));
   }
@@ -449,7 +544,10 @@ export class Hud {
   insets(): { top: number; right: number; bottom: number; left: number } {
     const W = window.innerWidth;
     const H = window.innerHeight;
-    const top = this.top.getBoundingClientRect();
+    const topBar = this.top.getBoundingClientRect();
+    const causal = this.causal.hidden ? null : this.causal.getBoundingClientRect();
+    const demo = this.demoOn && this.demoEl ? this.demoEl.getBoundingClientRect() : null;
+    const top = { bottom: Math.max(topBar.bottom, causal && causal.height ? causal.bottom : 0, demo && demo.height ? demo.bottom : 0) };
     const panel = this.panel.getBoundingClientRect();
     if (this.mobile) {
       // landscape phones: the sheet docks to the right edge instead of covering the bottom

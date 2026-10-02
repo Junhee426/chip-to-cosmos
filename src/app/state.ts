@@ -1,5 +1,6 @@
 import type { Modulation } from '../models/modulation';
 import type { Weighting } from '../models/array-factor';
+import type { ArrayPowerMode } from '../models/beam-solution';
 import type { LevelId } from './navigation';
 
 export type EngMode = 'structure' | 'signal' | 'power' | 'thermal' | 'radiation';
@@ -27,10 +28,11 @@ export interface Params {
   steerDeg: number;
   steerAzDeg: number;
   weighting: Weighting;
+  powerMode: ArrayPowerMode;
   paOutW: number;
-  // link
+  totalRfW: number;
+  // link (the user terminal sits at the beam centre: elevation follows from steering + altitude)
   altitudeKm: number;
-  elevationDeg: number;
   freqGHz: number;
   rxGainDbi: number;
 }
@@ -64,9 +66,10 @@ export const DEFAULT_PARAMS: Params = {
   steerDeg: 20,
   steerAzDeg: 0,
   weighting: 'uniform',
+  powerMode: 'per-element-fixed',
   paOutW: 1,
+  totalRfW: 256,
   altitudeKm: 550,
-  elevationDeg: 40,
   freqGHz: 19.7,
   rxGainDbi: 36,
 };
@@ -94,14 +97,15 @@ export const PARAM_LIMITS: Record<NumericParam, { min: number; max: number; step
   steerDeg: { min: -60, max: 60, step: 1 },
   steerAzDeg: { min: 0, max: 180, step: 5 },
   paOutW: { min: 0.1, max: 4, step: 0.05 },
+  totalRfW: { min: 16, max: 2048, step: 8 },
   altitudeKm: { min: 340, max: 1200, step: 10 },
-  elevationDeg: { min: 10, max: 90, step: 1 },
   freqGHz: { min: 10.7, max: 30, step: 0.1 },
   rxGainDbi: { min: 28, max: 45, step: 0.5 },
 };
 
 const MODULATIONS = new Set(['BPSK', 'QPSK', '16QAM', '64QAM']);
 const WEIGHTINGS = new Set(['uniform', 'hann', 'hamming', 'cosine']);
+const POWER_MODES = new Set(['per-element-fixed', 'total-rf-fixed']);
 
 /** Clamp/reject a parameter patch. Unknown or invalid values are dropped, numbers are clamped. */
 export function sanitizeParams(patch: Partial<Params>): Partial<Params> {
@@ -109,6 +113,10 @@ export function sanitizeParams(patch: Partial<Params>): Partial<Params> {
   for (const [k, v] of Object.entries(patch) as [keyof Params, unknown][]) {
     if (k === 'modulation') {
       if (typeof v === 'string' && MODULATIONS.has(v)) out.modulation = v as Params['modulation'];
+      continue;
+    }
+    if (k === 'powerMode') {
+      if (typeof v === 'string' && POWER_MODES.has(v)) out.powerMode = v as Params['powerMode'];
       continue;
     }
     if (k === 'weighting') {

@@ -6,8 +6,7 @@ import { box, instancedGrid, v3 } from '../graphics/geometry';
 import { FlowPath } from '../graphics/particles';
 import { RadiationShower, setHeat } from '../graphics/effects';
 import { dieTexture, sramTexture } from '../graphics/textures';
-import { evaluateSystem } from '../models/system-model';
-import { systemInput } from '../app/system';
+import { solveSystem } from '../app/system';
 import { BaseLevel, type Anchor } from './base';
 
 interface Block {
@@ -159,7 +158,7 @@ export class DieLevel extends BaseLevel {
       for (const g of this.blocks.values()) setHeat(g, 0);
       return;
     }
-    const sys = evaluateSystem(systemInput(state.params));
+    const sys = solveSystem(state.params);
     const area = (id: string) => {
       const b = BLOCKS.find((k) => k.id === id)!;
       return (b.x1 - b.x0) * (b.z1 - b.z0);

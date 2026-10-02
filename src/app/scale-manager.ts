@@ -147,6 +147,7 @@ export class ScaleManager {
         const step = steps[0];
         const dur = (stepDuration ?? (steps.length > 1 ? 1.7 : 2.8)) * this.motionScale;
         failedAt = step.to;
+        this.stepTo = step.to;
         if (step.dir === 'down') await this.stepDown(step.to, dur);
         else await this.stepUp(step.to, dur);
         failedAt = null;
@@ -158,10 +159,22 @@ export class ScaleManager {
       return false;
     } finally {
       this.intent = null;
+      this.stepTo = null;
       this.busy = false;
       this.transition = null;
       this.store.set({ transitioning: false });
     }
+  }
+
+  /** Destination of the step in flight (null when idle). */
+  private stepTo: LevelId | null = null;
+
+  /**
+   * Stop a multi-step route after the step in flight (that step still completes,
+   * so renormalisation is never left half-done). No-op when idle.
+   */
+  stop(): void {
+    if (this.busy) this.intent = this.stepTo ?? this.current?.id ?? null;
   }
 
   /** Put the current level back into a clean, interactive state after a failed step. */

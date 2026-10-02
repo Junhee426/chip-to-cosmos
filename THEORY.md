@@ -46,6 +46,19 @@ by the charts, the live equation read-outs and (where noted) the 3D geometry.
 - Directivity by numerical integration: `D = 4π U_max / ∯U dΩ`
 - Grating-lobe free if `d/λ < 1/(1+|sinθ₀|)`
 - **The 3D radiation surface is built vertex-by-vertex from |AF·EP| in dB**
+- Grating lobes at direction cosines `u = u₀ + m·λ/d`, `v = v₀ + n·λ/d` (visible when `u² + v² < 1`)
+- −3 dB contour: from the true maximum, each azimuth is marched outward and bisected to
+  |AF·EP| = peak/√2 (`traceContour`)
+
+## Beam footprint and frames (`models/frames.ts`, `models/beam-solution.ts`)
+
+- Array → body: rotation π about X, `(x, y, z) → (x, −y, −z)`; body → world: orbit basis
+  `{x̂ along-track, ŷ radial, ẑ = x̂ × ŷ}`
+- Ray–sphere: `|o + t·d|² = Re²` → `t = −b − √(b² − (|o|² − Re²))`, `b = o·d` (|d| = 1); no real
+  root → no intersection (above the horizon, `θ > asin(Re/(Re+h))`)
+- Elevation at the footprint centre `El = asin(n̂ · (S − G)/|S − G|)`; the link budget uses this El,
+  and its slant range equals |S − G| (tested)
+- Flat-ground (BEAM LAB) projection: `(x, z) = h·(dₓ/d_y, d_z/d_y)`
 
 ## Link budget (`models/link-budget.ts`)
 
@@ -65,5 +78,6 @@ by the charts, the live equation read-outs and (where noted) the 3D geometry.
 ```
 ADC bits, fs ─▶ P_ADC (Walden) + P_DSP (∝ N·fs) ─▶ payload DC ─▶ heat ─▶ radiator area
 N×N array, taper ─▶ directivity (numerical) ─▶ gain ─▶ EIRP ─▶ Pr, C/N0, Eb/N0 ─▶ margin
-PA output × N² / PAE ─▶ DC power ─▶ power margin and heat
+PA output × N² / PAE ─▶ DC power ─▶ power margin and heat   (fixed-per-element mode)
+θ₀, φ₀, h ─▶ beam centre on the sphere ─▶ El, R ─▶ FSPL ─▶ link margin
 ```

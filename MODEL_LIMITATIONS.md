@@ -17,7 +17,11 @@ shown in each level's THEORY tab.
 | Lattice geometry (SILICON) | **Exact** diamond-cubic positions, a = 0.5431 nm |
 | Lattice vibration, number of broken bonds | Illustrative (∝ √T, ∝ log10 ni) |
 | 3D radiation surface, phase colours, polar plot (BEAM LAB) | **Calculated** array factor × element pattern |
-| Wavefront rings | Illustrative; direction follows calculated steering |
+| Wavefront rings | Illustrative spacing/speed; spacing = λ, orientation ⟂ calculated beam axis |
+| −3 dB footprint, flat ground (BEAM LAB) | **Calculated** contour; distance to the ground plane compressed for display |
+| −3 dB footprint, spherical Earth (COSMOS, SATELLITE) | **Calculated** ray–sphere intersection of the same contour |
+| Grating-lobe directions and secondary footprints | **Calculated** (only drawn when ≥ −10 dB and the lobe reaches the Earth) |
+| Hero demo captions | Read from the calculation at display time; camera paths illustrative |
 | Link budget, coupling strip | **Calculated** |
 | Die thermal colours | **Calculated** relative power density from the system model |
 | Satellite / payload / PCB / package geometry | Generic, plausible, not a specific product |
@@ -39,7 +43,14 @@ shown in each level's THEORY tab.
 - **Array**: isolated identical elements (no mutual coupling or scan blindness), ideal phase
   shifters, gain = directivity × 70 %.
 - **Link**: free space + lumped 3 dB losses; no rain fade, Doppler, interference or polarisation
-  mismatch statistics.
+  mismatch statistics. The user is assumed at the beam centre (peak gain); edge-of-beam users would
+  see up to 3 dB less.
+- **Footprint**: spherical Earth (no oblateness or terrain); the spacecraft is nadir-pointing with
+  zero yaw; along/cross-track extents and area are measured in the tangent plane at the beam centre
+  (accurate while the footprint ≪ Earth radius; near the limb the contour may be clipped and is
+  flagged). The beam maximum includes element-pattern squint, searched in the scan plane.
+- **Power scaling**: in *fixed per element* mode the total RF power grows with N², so changing N
+  changes EIRP by both directivity and power; *fixed total RF* isolates the directivity effect.
 - **Power/thermal**: orbit-average, single-node radiator at 300 K, effective sink 200 K,
   β = 0 eclipse.
 - **Geometry**: several levels are not to scale (flagged `NOT TO SCALE` in the HUD); thin layers

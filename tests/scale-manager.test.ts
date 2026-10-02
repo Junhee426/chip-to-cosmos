@@ -95,6 +95,18 @@ describe('ScaleManager navigation', () => {
     expect(mgr.currentId).toBe('payload');
   });
 
+  it('stop() ends a multi-step route after the step in flight (demo skip)', async () => {
+    const { mgr } = setup();
+    await mgr.jumpTo('array');
+    const p = mgr.goTo('cosmos'); // array → satellite → cosmos
+    mgr.stop();
+    expect(await p).toBe(false);
+    expect(mgr.currentId).toBe('satellite');
+    expect(mgr.isBusy).toBe(false);
+    mgr.stop(); // idle: no-op
+    expect(await mgr.goTo('cosmos')).toBe(true);
+  });
+
   it('loader failure: state recovers, pending is cleared, and a retry works', async () => {
     let fail = true;
     const { mgr, store, built, disposed } = setup({

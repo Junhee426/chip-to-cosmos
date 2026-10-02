@@ -26,10 +26,11 @@ export const THEORY: Record<LevelId, LevelTheory> = {
     engineering: [
       'A Walker-delta constellation spreads P orbital planes evenly in RAAN, with S satellites per plane and a phasing factor F between planes.',
       'Link quality depends on slant range, which grows quickly as elevation drops: R = √((Re+h)² − (Re cos El)²) − Re sin El. Free-space loss grows as 20·log10(R).',
+      'The blue footprint is the −3 dB contour of the BEAM LAB array pattern, carried array → spacecraft → Earth frame and intersected with the spherical Earth. The user terminal sits at its centre, so steering sets the elevation and slant range used by the link budget.',
       'Optical inter-satellite links (ISLs) route traffic in space, reducing the number of gateways needed on the ground.',
     ],
     models: [LINK_META],
-    illustrative: ['Satellite markers are enlarged ~2000×', 'Orbital motion is time-lapsed ×95', 'Van Allen belt shapes are schematic'],
+    illustrative: ['Satellite and terminal markers are enlarged (shrinking as you zoom in)', 'Orbital motion is time-lapsed ×95', 'Van Allen belt shapes are schematic', 'The −3 dB footprint is drawn ~6 km above the surface to stay visible'],
   },
   satellite: {
     intuition: [
@@ -52,10 +53,11 @@ export const THEORY: Record<LevelId, LevelTheory> = {
     engineering: [
       'Gain scales with the number of elements (≈ 10·log10(N²) for an N×N tile) and beamwidth shrinks as ≈ 0.886·λ/(N·d·cos θ₀) for uniform weights.',
       'Amplitude tapers (Hann, Hamming) lower sidelobes but widen the beam and cost some gain (taper efficiency).',
-      'Spacing above λ/(1+|sin θ₀|) lets grating lobes appear: full-strength copies of the beam in wrong directions.',
+      'Spacing above λ/(1+|sin θ₀|) lets grating lobes appear: full-strength copies of the beam in wrong directions. If such a lobe reaches the ground it illuminates a second area (amber) — interference and direction ambiguity.',
+      'The white ring on the radiation surface and the edge rays mark the −3 dB contour; projected on the ground it is the beam footprint. Here the ground is a flat plane (distance compressed); COSMOS intersects the same contour with the spherical Earth.',
     ],
     models: [ARRAY_META],
-    illustrative: ['Wavefront rings are schematic; their direction follows the calculated steering angle'],
+    illustrative: ['Wavefront rings: spacing = λ and orientation ⟂ the calculated beam; speed and ring size are schematic', 'Distance to the BEAM LAB ground plane is compressed (directions are exact)'],
   },
   payload: {
     intuition: [

@@ -1,5 +1,6 @@
 import type { ModelMeta } from './meta';
 import { ratioToDb } from './units';
+import { EARTH_RADIUS_KM, canonicalOrbit, cross, dot, earthIntersection, elevationDeg, greatCircleKm, len, normalize, sub, arrayDirToWorld, type Vec3 } from './frames';
 
 export type Weighting = 'uniform' | 'hann' | 'hamming' | 'cosine';
 
@@ -78,8 +79,27 @@ function sum1d(w: number[], psi: number): number {
 
 /** Element pattern: cos^q θ in the forward hemisphere, a small back-lobe floor behind the ground plane. */
 export function elementPattern(theta: number, q: number): number {
-  const c = Math.cos(theta);
+  return elementPatternCos(Math.cos(theta), q);
+}
+
+/** Element field pattern from cos θ (= the boresight component of a unit direction). */
+export function elementPatternCos(c: number, q: number): number {
   return c > 0 ? Math.pow(c, q / 2) /* field */ : 0.003;
+}
+
+/**
+ * |AF · EP| for a unit direction in the ARRAY LOCAL frame (+Y boresight).
+ * Identical to planarAF(θ, φ) · elementPattern(θ), written with direction
+ * cosines u = d.x = sinθ cosφ, v = d.z = sinθ sinφ.
+ */
+export function fieldAt(p: ArrayParams, w: number[], d: Vec3): number {
+  const q = p.elementQ ?? 1.3;
+  const t0 = (p.steerThetaDeg * Math.PI) / 180;
+  const p0 = (p.steerPhiDeg * Math.PI) / 180;
+  const kd = 2 * Math.PI * p.spacingLambda;
+  const psiX = kd * d[0] - kd * Math.sin(t0) * Math.cos(p0);
+  const psiY = kd * d[2] - kd * Math.sin(t0) * Math.sin(p0);
+  return sum1d(w, psiX) * sum1d(w, psiY) * elementPatternCos(d[1], q);
 }
 
 export interface ArrayMetrics {
@@ -173,6 +193,114 @@ export const ARRAY_META: ModelMeta = {
   kind: 'calculated',
 };
 
+
+/** Smallest d/λ that lets a grating lobe enter visible space for steering θ0 (in-plane lobe). */
+export function gratingLimit(steerThetaDeg: number): number {
+  return 1 / (1 + Math.abs(Math.sin((steerThetaDeg * Math.PI) / 180)));
+}
+
+/** Unit vector rotated from `axis` by angle `a` toward `side` (side ⟂ axis). */
+function tilt(axis: Vec3, side: Vec3, a: number): Vec3 {
+  const c = Math.cos(a);
+  const s = Math.sin(a);
+  return [axis[0] * c + side[0] * s, axis[1] * c + side[1] * s, axis[2] * c + side[2] * s];
+}
+
+/**
+ * Locate the true lobe maximum near a nominal direction. The element pattern
+ * pulls a scanned lobe slightly toward boresight, so the maximum is searched
+ * (golden section) along the great circle through boresight and `nominal`.
+ */
+export function refinePeak(f: (d: Vec3) => number, nominal: Vec3, halfWidthRad: number): Vec3 {
+  const sinA = Math.hypot(nominal[0], nominal[2]);
+  if (sinA < 1e-9) return nominal;
+  const e2: Vec3 = [nominal[0] / sinA, 0, nominal[2] / sinA];
+  const a0 = Math.atan2(sinA, nominal[1]);
+  const at = (a: number): Vec3 => [e2[0] * Math.sin(a), Math.cos(a), e2[2] * Math.sin(a)];
+  let lo = Math.max(0, a0 - halfWidthRad);
+  let hi = Math.min(Math.PI / 2, a0 + halfWidthRad);
+  const g = (Math.sqrt(5) - 1) / 2;
+  let x1 = hi - g * (hi - lo);
+  let x2 = lo + g * (hi - lo);
+  let f1 = f(at(x1));
+  let f2 = f(at(x2));
+  for (let i = 0; i < 40; i++) {
+    if (f1 < f2) {
+      lo = x1; x1 = x2; f1 = f2; x2 = lo + g * (hi - lo); f2 = f(at(x2));
+    } else {
+      hi = x2; x2 = x1; f2 = f1; x1 = hi - g * (hi - lo); f1 = f(at(x1));
+    }
+  }
+  const best = at((lo + hi) / 2);
+  return f(best) >= f(nominal) ? best : nominal;
+}
+
+/**
+ * Directions where |AF·EP| falls to `level` around `axis`, one per azimuth step
+ * (ordered, so consecutive points form a closed contour). Each ray is marched
+ * outward with step `step` (rad) and then bisected to 1e-5 rad.
+ */
+export function traceContour(f: (d: Vec3) => number, axis: Vec3, level: number, nAz: number, step: number, maxAngle = 1.4): Vec3[] {
+  const ref: Vec3 = Math.abs(axis[1]) > 0.99 ? [1, 0, 0] : [0, 1, 0];
+  const u = normalize(cross(axis, ref));
+  const v = normalize(cross(axis, u));
+  const out: Vec3[] = [];
+  for (let k = 0; k < nAz; k++) {
+    const psi = (2 * Math.PI * k) / nAz;
+    const side: Vec3 = [u[0] * Math.cos(psi) + v[0] * Math.sin(psi), u[1] * Math.cos(psi) + v[1] * Math.sin(psi), u[2] * Math.cos(psi) + v[2] * Math.sin(psi)];
+    let hi = -1;
+    for (let a = step; a <= maxAngle; a += step) {
+      if (f(tilt(axis, side, a)) < level) {
+        hi = a;
+        break;
+      }
+    }
+    if (hi < 0) continue;
+    let lo = hi - step;
+    while (hi - lo > 1e-5) {
+      const m = (lo + hi) / 2;
+      if (f(tilt(axis, side, m)) < level) hi = m;
+      else lo = m;
+    }
+    out.push(normalize(tilt(axis, side, (lo + hi) / 2)));
+  }
+  return out;
+}
+
+export interface Lobe {
+  /** lobe maximum, ARRAY LOCAL unit vector */
+  axis: Vec3;
+  /** peak level relative to the main beam (dB) */
+  levelDb: number;
+  /** grating order (m, n) — (0, 0) is the main beam */
+  order: [number, number];
+}
+
+/**
+ * Grating lobes in visible space. AF maxima repeat at direction cosines
+ * u = u0 + m/(d/λ), v = v0 + n/(d/λ); a lobe exists where u² + v² < 1.
+ */
+export function gratingLobes(p: ArrayParams, w: number[], mainPeak: number, hpbwRad: number): Lobe[] {
+  const t0 = (p.steerThetaDeg * Math.PI) / 180;
+  const p0 = (p.steerPhiDeg * Math.PI) / 180;
+  const u0 = Math.sin(t0) * Math.cos(p0);
+  const v0 = Math.sin(t0) * Math.sin(p0);
+  const f = (d: Vec3) => fieldAt(p, w, d);
+  const out: Lobe[] = [];
+  const M = Math.ceil(2 * p.spacingLambda) + 1;
+  for (let m = -M; m <= M; m++) for (let n = -M; n <= M; n++) {
+    if (m === 0 && n === 0) continue;
+    const u = u0 + m / p.spacingLambda;
+    const v = v0 + n / p.spacingLambda;
+    const r2 = u * u + v * v;
+    if (r2 >= 1 - 1e-6) continue;
+    const nominal: Vec3 = [u, Math.sqrt(1 - r2), v];
+    const axis = refinePeak(f, nominal, hpbwRad);
+    out.push({ axis, levelDb: 20 * Math.log10(Math.max(f(axis), 1e-9) / mainPeak), order: [m, n] });
+  }
+  return out.sort((a, b) => b.levelDb - a.levelDb);
+}
+
 export interface Footprint {
   /** −3 dB contour on a flat ground plane at `altitudeKm` along boresight: (x, z) in km */
   contourKm: [number, number][];
@@ -186,52 +314,45 @@ export interface Footprint {
   areaKm2: number;
 }
 
+/** Contour-tracing step: a fraction of the half-power width, bounded for narrow and broad beams. */
+export function contourStep(hpbwDeg: number): number {
+  return Math.min(0.01, Math.max(0.0008, (hpbwDeg * Math.PI) / 180 / 12));
+}
+
 /**
  * −3 dB beam footprint, traced numerically from the same |AF·EP| used for the
- * radiation surface: around the beam axis, step away until the pattern is 3 dB
- * below the peak, then intersect that direction with a flat ground plane at the
- * orbit altitude (flat-Earth approximation; valid for footprints ≪ Earth radius).
+ * radiation surface: around the beam maximum, step away until the pattern is
+ * 3 dB below the peak, then intersect that direction with a flat ground plane
+ * at the orbit altitude (flat-Earth; BEAM LAB pedagogy — see sphericalFootprint).
  */
-export function beamFootprint(p: ArrayParams, altitudeKm: number, nAz = 72): Footprint {
-  const q = p.elementQ ?? 1.3;
+export function beamFootprint(p: ArrayParams, altitudeKm: number, nAz = 72, hpbwDeg?: number): Footprint {
   const w = weights(p.n, p.weighting);
+  const f = (d: Vec3) => fieldAt(p, w, d);
+  const hp = hpbwDeg ?? estimateHpbwDeg(p);
+  const axis = refinePeak(f, steerAxis(p), ((hp / 2) * Math.PI) / 180);
+  const directions = traceContour(f, axis, f(axis) / Math.SQRT2, nAz, contourStep(hp));
+  return flatFootprint(directions, axis, p.steerPhiDeg, altitudeKm);
+}
+
+/** Nominal steering direction (ARRAY LOCAL). */
+export function steerAxis(p: ArrayParams): Vec3 {
   const t0 = (p.steerThetaDeg * Math.PI) / 180;
   const p0 = (p.steerPhiDeg * Math.PI) / 180;
-  const axis: [number, number, number] = [Math.sin(t0) * Math.cos(p0), Math.cos(t0), Math.sin(t0) * Math.sin(p0)];
-  const gainAt = (d: [number, number, number]): number => {
-    const th = Math.acos(Math.max(-1, Math.min(1, d[1])));
-    const ph = Math.atan2(d[2], d[0]);
-    return planarAF(p, w, th, ph) * elementPattern(th, q);
-  };
-  const peak = gainAt(axis);
-  const half = peak / Math.SQRT2; // −3 dB in field amplitude
-  // orthonormal basis around the axis
-  const ref: [number, number, number] = Math.abs(axis[1]) > 0.99 ? [1, 0, 0] : [0, 1, 0];
-  const u = normalize(cross(axis, ref));
-  const v = normalize(cross(axis, u));
+  return [Math.sin(t0) * Math.cos(p0), Math.cos(t0), Math.sin(t0) * Math.sin(p0)];
+}
+
+/** Uniform-array HPBW estimate (only seeds the contour step when metrics are not at hand). */
+function estimateHpbwDeg(p: ArrayParams): number {
+  const c = Math.max(0.2, Math.cos((p.steerThetaDeg * Math.PI) / 180));
+  return Math.min(60, (50.8 / (p.n * p.spacingLambda)) / c);
+}
+
+/** Project contour directions onto a flat plane at `altitudeKm` below the array (along boresight). */
+export function flatFootprint(directions: Vec3[], axis: Vec3, steerPhiDeg: number, altitudeKm: number): Footprint {
   const contourKm: [number, number][] = [];
-  const directions: [number, number, number][] = [];
-  for (let k = 0; k < nAz; k++) {
-    const psi = (2 * Math.PI * k) / nAz;
-    const side: [number, number, number] = [u[0] * Math.cos(psi) + v[0] * Math.sin(psi), u[1] * Math.cos(psi) + v[1] * Math.sin(psi), u[2] * Math.cos(psi) + v[2] * Math.sin(psi)];
-    let alpha = 0;
-    let d = axis;
-    for (let a = 0.0005; a < 1.2; a += 0.0005) {
-      const c = Math.cos(a);
-      const s = Math.sin(a);
-      const cand: [number, number, number] = [axis[0] * c + side[0] * s, axis[1] * c + side[1] * s, axis[2] * c + side[2] * s];
-      if (gainAt(cand) < half) {
-        alpha = a;
-        d = cand;
-        break;
-      }
-    }
-    if (alpha === 0) continue;
-    directions.push(d);
-    if (d[1] > 1e-3) contourKm.push([(d[0] / d[1]) * altitudeKm, (d[2] / d[1]) * altitudeKm]);
-  }
-  const centerKm: [number, number] = [(axis[0] / axis[1]) * altitudeKm, (axis[2] / axis[1]) * altitudeKm];
-  // extents in the steering-plane frame
+  for (const d of directions) if (d[1] > 1e-3) contourKm.push([(d[0] / d[1]) * altitudeKm, (d[2] / d[1]) * altitudeKm]);
+  const centerKm: [number, number] = axis[1] > 1e-3 ? [(axis[0] / axis[1]) * altitudeKm, (axis[2] / axis[1]) * altitudeKm] : [0, 0];
+  const p0 = (steerPhiDeg * Math.PI) / 180;
   const ca = Math.cos(p0);
   const sa = Math.sin(p0);
   let minA = Infinity, maxA = -Infinity, minC = Infinity, maxC = -Infinity, area = 0;
@@ -243,13 +364,81 @@ export function beamFootprint(p: ArrayParams, altitudeKm: number, nAz = 72): Foo
     const [x2, z2] = contourKm[(i + 1) % contourKm.length];
     area += x * z2 - x2 * z;
   });
-  return { contourKm, directions, centerKm, alongKm: maxA - minA, acrossKm: maxC - minC, areaKm2: Math.abs(area) / 2 };
+  const ok = contourKm.length >= 3;
+  return { contourKm, directions: directions as [number, number, number][], centerKm, alongKm: ok ? maxA - minA : 0, acrossKm: ok ? maxC - minC : 0, areaKm2: ok ? Math.abs(area) / 2 : 0 };
 }
 
-function cross(a: [number, number, number], b: [number, number, number]): [number, number, number] {
-  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+export interface SphericalFootprint {
+  /** −3 dB contour on the Earth sphere, Earth-centred km in the CANONICAL orbit frame */
+  contour: Vec3[];
+  /** false when part of the contour points above the horizon (those rays miss the Earth) */
+  complete: boolean;
+  /** ground point of the beam maximum, or null when the beam axis misses the Earth */
+  center: Vec3 | null;
+  /** elevation of the satellite seen from `center` (deg) */
+  centerElevationDeg: number | null;
+  slantRangeKm: number | null;
+  /** great-circle distance from the sub-satellite point to `center` */
+  nadirOffsetKm: number | null;
+  /** extents in the local tangent plane at the centre, along and across the ground track */
+  alongTrackKm: number;
+  crossTrackKm: number;
+  areaKm2: number;
 }
-function normalize(a: [number, number, number]): [number, number, number] {
-  const l = Math.hypot(a[0], a[1], a[2]);
-  return [a[0] / l, a[1] / l, a[2] / l];
+
+/**
+ * Spherical-Earth footprint: every contour direction is taken
+ * ARRAY LOCAL → SATELLITE BODY → EARTH/WORLD (canonical orbit) and the ray from
+ * the spacecraft is intersected with the Earth sphere. Rays that miss
+ * (above the horizon) are dropped and reported via `complete = false`.
+ */
+export function sphericalFootprint(directions: Vec3[], axis: Vec3, altitudeKm: number): SphericalFootprint {
+  const orbit = canonicalOrbit(altitudeKm);
+  const contour: Vec3[] = [];
+  for (const d of directions) {
+    const g = earthIntersection(orbit, arrayDirToWorld(d, orbit));
+    if (g) contour.push(g);
+  }
+  const center = earthIntersection(orbit, arrayDirToWorld(axis, orbit));
+  const nadir: Vec3 = [0, EARTH_RADIUS_KM, 0];
+  const ref = center ?? (contour.length ? normalizeTo(contour.reduce((a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]] as Vec3, [0, 0, 0] as Vec3), EARTH_RADIUS_KM) : null);
+  let alongTrackKm = 0, crossTrackKm = 0, areaKm2 = 0;
+  if (ref && contour.length >= 3) {
+    const n = normalize(ref);
+    let a = sub(orbit.x, [n[0] * dot(orbit.x, n), n[1] * dot(orbit.x, n), n[2] * dot(orbit.x, n)]);
+    if (len(a) < 1e-6) a = [0, 0, 1];
+    a = normalize(a);
+    const c = cross(n, a);
+    let minA = Infinity, maxA = -Infinity, minC = Infinity, maxC = -Infinity, area = 0;
+    const loc = contour.map((p) => {
+      const r = sub(p, ref);
+      return [dot(r, a), dot(r, c)] as [number, number];
+    });
+    loc.forEach(([x, y], i) => {
+      minA = Math.min(minA, x); maxA = Math.max(maxA, x);
+      minC = Math.min(minC, y); maxC = Math.max(maxC, y);
+      const [x2, y2] = loc[(i + 1) % loc.length];
+      area += x * y2 - x2 * y;
+    });
+    alongTrackKm = maxA - minA;
+    crossTrackKm = maxC - minC;
+    areaKm2 = Math.abs(area) / 2;
+  }
+  return {
+    contour,
+    complete: contour.length === directions.length && directions.length > 0,
+    center,
+    centerElevationDeg: center ? elevationDeg(center, orbit.posKm) : null,
+    slantRangeKm: center ? len(sub(orbit.posKm, center)) : null,
+    nadirOffsetKm: center ? greatCircleKm(nadir, center) : null,
+    alongTrackKm: finite(alongTrackKm),
+    crossTrackKm: finite(crossTrackKm),
+    areaKm2: finite(areaKm2),
+  };
 }
+
+function normalizeTo(a: Vec3, r: number): Vec3 {
+  const n = normalize(a);
+  return [n[0] * r, n[1] * r, n[2] * r];
+}
+const finite = (x: number): number => (Number.isFinite(x) ? x : 0);

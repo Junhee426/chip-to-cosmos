@@ -57,6 +57,20 @@ scale lives in the same navigation system and is linked by calculated models.
 - [ ] Real-device (phone / Surface / GPU) frame-time measurements — not yet recorded
 - [ ] Level construction spread over idle frames (first-visit hitch, see docs/performance-results.md)
 
+## V3 status (hero demo: Satellite → Beam Lab → Earth footprint)
+
+- [x] Shared `BeamSolution` (pattern, contour, flat + spherical footprints, grating lobes, power, link) memoised per state
+- [x] Spherical-Earth footprint by ray–sphere intersection; horizon / no-hit handled without NaN
+- [x] Coordinate frames centralised in `models/frames.ts` with unit tests
+- [x] BEAM LAB, SATELLITE and COSMOS draw the same solution; link uses the visible beam-centre geometry
+- [x] Explicit RF power mode (fixed per element / fixed total RF)
+- [x] Hero demo (skippable, replayable, reduced-motion aware), causal strip, four hero controls, validated presets
+- [x] Grating-lobe experiment with calculated secondary footprints; taper before/after
+- [x] Satellite sub-array with the BEAM LAB element count, spacing and phase colours at the anchor
+- [x] Hero harness: 9 captures, smoke checks, repeated-run resource counts, emulated mobile journey
+- [ ] Hardware-GPU and real-device frame times for the demo — not yet recorded (SwiftShader only)
+- [ ] Beam-squint is searched in the scan plane only (sub-0.1° effect off-plane, see MODEL_LIMITATIONS)
+
 ## Roadmap (post-V1)
 
 - Doppler & rain-fade (ITU-R P.618) in the link budget; interference (C/I)

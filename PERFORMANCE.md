@@ -194,3 +194,19 @@ further reduced by the tier's density; mono sub-lines are hidden.
   820×1180 (portrait + landscape) and 1280×800 / 1440×900 for control overlap, touch-target size,
   sheet behaviour, selected-part visibility and the Internal View → Back journey. These are
   **emulations**, not real-device measurements.
+
+## V3 additions (hero beam demo)
+
+- **One evaluation per state.** `solveSystem(params)` / `beamSolution(params)` are memoised on the
+  params object (the store replaces it on every change), so the scenes, panels, causal strip and
+  coupling strip share one `solveBeam()` per parameter change instead of evaluating the array
+  model separately.
+- **Frame-coalesced updates.** BEAM LAB marks itself dirty on parameter changes and rebuilds at most
+  once per rendered frame; the HUD coalesces parameter-only store events into one update per
+  animation frame. A slider drag therefore never runs the model more than once per frame.
+- **Buffer reuse.** Beam-axis line, −3 dB ring, footprint fill/contour, edge rays, grating-lobe
+  contours (BEAM LAB) and footprint, rays and secondary contours (COSMOS) are fixed-capacity
+  `BufferGeometry`s rewritten in place with `setDrawRange`; no geometry is allocated per update.
+- **Quality-aware density.** Wavefront count scales with the tier's particle factor (never below 3);
+  the calculated footprint, contour and rays are never reduced.
+- **Measured** in `docs/performance-results.md` (V3 section) with `scripts/hero.mjs`.

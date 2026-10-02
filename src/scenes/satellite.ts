@@ -7,9 +7,15 @@ import { FlowPath } from '../graphics/particles';
 import { RadiationShower, setHeat } from '../graphics/effects';
 import { createEarth } from '../graphics/earth';
 import { BaseLevel, type Anchor } from './base';
-import { evaluateSystem } from '../models/system-model';
-import { beamFootprint } from '../models/array-factor';
-import { systemInput } from '../app/system';
+import { beamSolution, solveSystem } from '../app/system';
+import { phaseColor } from '../graphics/effects';
+import { EARTH_RADIUS_KM, arrayDirToBody } from '../models/frames';
+import { wavelengthM } from '../models/units';
+
+/** Earth backdrop: the real Earth scaled down uniformly (radius 3000 m ↔ 6371 km), so the
+ *  spherical footprint and the altitude/radius ratio are geometrically exact. */
+const EARTH_R = 3000;
+const M_PER_KM = EARTH_R / EARTH_RADIUS_KM;
 
 /**
  * LEVEL 1 — generic LEO broadband communication satellite (units: metres).
@@ -28,12 +34,18 @@ export class SatelliteLevel extends BaseLevel {
   private shower!: RadiationShower;
   private earth!: ReturnType<typeof createEarth>;
   private plume!: THREE.Mesh;
-  private arrayTile = v3(0.55, -0.66, -0.02);
+  /** centre of the BEAM LAB sub-array, on the radiating face of the +X nadir tile */
+  private arrayTile = v3(0.55, -0.697, -0.02);
   private beam = new THREE.Group();
   private beamCone!: THREE.Mesh;
   private beamRim!: THREE.LineLoop;
   private beamAnchor = new THREE.Object3D();
   private beamKey = '';
+  private beamAxis!: THREE.Line;
+  private beamCenter!: THREE.Mesh;
+  private subarray = new THREE.Group();
+  private subPatches: THREE.InstancedMesh | null = null;
+  private subKey = '';
 
   build(): void {
     const r = this.root;
@@ -233,8 +245,8 @@ export class SatelliteLevel extends BaseLevel {
     this.addComponent({ essential: true, id: 'solar', name: 'Solar Array', sub: '2 wings · 16.8 m²', object: solar, labelLocal: v3(0, 0.05, 3.6), desc: 'Two deployable wings of triple-junction GaAs cells (~30 % efficient), rotated by a solar-array drive to track the Sun.', specs: ['6 panels × 2.8 m²', 'η ≈ 30 % (BOL)', 'Orbit-average ≈ 3.5 kW'] });
 
     // ---------- Earth backdrop (not to scale in distance; correct limb geometry) ----------
-    this.earth = createEarth({ radius: 3000, sunDir: this.ctx.sunDir, segments: 192, glow: 0.45 });
-    this.earth.group.position.set(0, -3259, 0);
+    this.earth = createEarth({ radius: EARTH_R, sunDir: this.ctx.sunDir, segments: 192, glow: 0.45 });
+    this.earth.group.position.set(0, -(EARTH_RADIUS_KM + this.ctx.store.get().params.altitudeKm) * M_PER_KM, 0);
     this.earth.group.rotation.set(0.4, 0, 0.2);
     this.earth.group.userData.noFade = true;
     this.earth.group.userData.backdrop = true;
@@ -271,14 +283,24 @@ export class SatelliteLevel extends BaseLevel {
     this.addFlow('thermal', new FlowPath([v3(-0.7, 0.3, 0.2), v3(-0.7, 0.58, 0.1), v3(0.3, 0.62, -0.2)], { color: COLORS.thermal, count: 16, size: 0.045, speed: 0.18, tube: 0.006 }));
     for (let i = 0; i < 5; i++) this.addFlow('thermal', new FlowPath([v3(-0.9 + i * 0.45, 0.65, -0.3 + (i % 2) * 0.5), v3(-0.9 + i * 0.45, 2.4, -0.3 + (i % 2) * 0.5)], { color: '#ff9a6a', count: 8, size: 0.06, speed: 0.35 }));
 
-    // ---------- User beam (SIGNAL mode): cone + −3 dB footprint from the array state ----------
-    this.beamCone = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color: COLORS.signal, transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }));
-    this.beamRim = new THREE.LineLoop(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: '#cfe9ff', transparent: true, opacity: 0.9 }));
-    this.beam.add(this.beamCone, this.beamRim, this.beamAnchor);
+    // ---------- User beam (SIGNAL mode): the shared BeamSolution on the scaled spherical Earth ----------
+    this.beamCone = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color: COLORS.signal, transparent: true, opacity: 0.1, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }));
+    this.beamRim = new THREE.LineLoop(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: '#e8f6ff', transparent: true, opacity: 0.95 }));
+    this.beamAxis = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.6 }));
+    this.beamCenter = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), new THREE.MeshBasicMaterial({ color: '#ffffff' }));
+    this.beam.add(this.beamCone, this.beamRim, this.beamAxis, this.beamCenter, this.beamAnchor);
     this.beam.userData.noFade = true;
     this.beam.visible = false;
     r.add(this.beam);
-    this.addComponent({ id: 'user-beam', name: 'User Beam', sub: '−3 dB footprint · calculated', object: this.beamAnchor, desc: 'One of the phased-array user beams. Cone and footprint are the −3 dB contour of the same array factor used in BEAM LAB, steered by the current θ₀/φ₀ (flat-Earth projection onto the backdrop).', specs: ['From arrayN, spacing, steering, taper', 'Footprint size in BEAM LAB / COSMOS'], label: true });
+    this.addComponent({ id: 'user-beam', name: 'User Beam', sub: '−3 dB footprint · spherical Earth', object: this.beamAnchor, desc: 'The phased-array user beam. Its edge is the −3 dB contour of the same array factor used in BEAM LAB, carried from the array frame to the spacecraft frame and intersected with the Earth (shown uniformly scaled: radius and altitude keep their true ratio).', specs: ['From arrayN, spacing, steering, taper', 'Spherical-Earth intersection'], label: true });
+
+    // BEAM LAB sub-array on the radiating face: same N, spacing and phase colours (SIGNAL mode)
+    this.subarray.position.copy(this.arrayTile);
+    this.subarray.quaternion.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI);
+    this.subarray.scale.setScalar(0.01); // BEAM LAB units are cm
+    this.subarray.visible = false;
+    r.add(this.subarray);
+    this.updateBeam(this.ctx.store.get());
 
     this.shower = new RadiationShower([v3(0.55, -0.23, 0), v3(-0.7, 0.3, 0.2), v3(-0.7, -0.25, 0.25)], 4, 16, COLORS.radiation, 0.06);
     r.add(this.shower.group);
@@ -313,28 +335,75 @@ export class SatelliteLevel extends BaseLevel {
     }
   }
 
-  /** Beam cone + footprint, recomputed only when the array state changes. */
+  /**
+   * Beam cone + footprint from the shared BeamSolution. Contour directions go
+   * ARRAY LOCAL → BODY (frames.arrayDirToBody); the footprint is the solution's
+   * spherical-Earth contour (canonical orbit frame = this scene's body frame), scaled.
+   */
   private updateBeam(state: AppState): void {
     const p = state.params;
-    const key = [p.arrayN, p.spacingLambda, p.steerDeg, p.steerAzDeg, p.weighting].join('|');
+    const key = [p.arrayN, p.spacingLambda, p.steerDeg, p.steerAzDeg, p.weighting, p.altitudeKm, p.freqGHz].join('|');
     if (key === this.beamKey) return;
     this.beamKey = key;
-    const f = beamFootprint({ n: p.arrayN, spacingLambda: p.spacingLambda, steerThetaDeg: p.steerDeg, steerPhiDeg: p.steerAzDeg, weighting: p.weighting }, 550, 72);
-    // array frame (+Y boresight) → spacecraft frame (nadir −Y): the BEAM LAB anchor flips about X
+    const sol = beamSolution(p);
+    const earthY = -(EARTH_RADIUS_KM + p.altitudeKm) * M_PER_KM;
+    this.earth.group.position.y = earthY;
+    const toScene = (g: [number, number, number]) => v3(g[0] * M_PER_KM, earthY + g[1] * M_PER_KM, g[2] * M_PER_KM);
     const apex = this.arrayTile.clone();
-    const groundY = -258; // top of the Earth backdrop
-    const rim = f.directions
-      .map(([x, y, z]) => v3(x, -y, -z))
-      .filter((d) => d.y < -0.05)
-      .map((d) => apex.clone().addScaledVector(d, (groundY - apex.y) / d.y));
-    if (rim.length < 3) return;
-    this.beamRim.geometry.dispose();
-    this.beamRim.geometry = new THREE.BufferGeometry().setFromPoints(rim);
-    const tri: THREE.Vector3[] = [];
-    rim.forEach((q, i) => tri.push(apex, q, rim[(i + 1) % rim.length]));
-    this.beamCone.geometry.dispose();
-    this.beamCone.geometry = new THREE.BufferGeometry().setFromPoints(tri);
-    this.beamAnchor.position.copy(rim.reduce((a, b) => a.add(b), v3(0, 0, 0)).divideScalar(rim.length));
+    const rim = sol.footprint.contour.map(toScene);
+    this.updateSubarray(state);
+    if (rim.length < 3) {
+      this.beamRim.visible = this.beamCone.visible = false;
+    } else {
+      this.beamRim.visible = this.beamCone.visible = true;
+      this.beamRim.geometry.dispose();
+      this.beamRim.geometry = new THREE.BufferGeometry().setFromPoints(rim);
+      const tri: THREE.Vector3[] = [];
+      rim.forEach((q, i) => tri.push(apex, q, rim[(i + 1) % rim.length]));
+      this.beamCone.geometry.dispose();
+      this.beamCone.geometry = new THREE.BufferGeometry().setFromPoints(tri);
+    }
+    const c = sol.footprint.center;
+    const end = c ? toScene(c) : apex.clone().addScaledVector(v3(...arrayDirToBody(sol.pattern.axis)), 120);
+    this.beamAxis.geometry.dispose();
+    this.beamAxis.geometry = new THREE.BufferGeometry().setFromPoints([apex, end]);
+    this.beamCenter.visible = !!c;
+    this.beamCenter.position.copy(end);
+    this.beamCenter.scale.setScalar(Math.max(1.2, (sol.footprint.alongTrackKm || 10) * M_PER_KM * 0.05));
+    this.beamAnchor.position.copy(c ? end : apex.clone().addScaledVector(v3(...arrayDirToBody(sol.pattern.axis)), 40));
+  }
+
+  /** The sub-array that BEAM LAB opens into: real element count, spacing and phase colours. */
+  private updateSubarray(state: AppState): void {
+    const p = state.params;
+    const sol = beamSolution(p);
+    const d = p.spacingLambda * wavelengthM(p.freqGHz * 1e9) * 100; // cm
+    const key = `${p.arrayN}|${d.toFixed(4)}`;
+    if (key !== this.subKey) {
+      this.subKey = key;
+      this.subPatches?.geometry.dispose();
+      this.subarray.clear();
+      const size = p.arrayN * d;
+      this.subarray.add(box(size + d, 0.2, size + d, mat.darkPanel(), [0, -0.1, 0]));
+      this.subPatches = new THREE.InstancedMesh(new THREE.BoxGeometry(d * 0.55, 0.06, d * 0.55), new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.6, roughness: 0.35, emissive: new THREE.Color(0x203040), emissiveIntensity: 0.6 }), p.arrayN * p.arrayN);
+      const m4 = new THREE.Matrix4();
+      let k = 0;
+      for (let i = 0; i < p.arrayN; i++) for (let j = 0; j < p.arrayN; j++) {
+        m4.makeTranslation((i - (p.arrayN - 1) / 2) * d, 0.03, (j - (p.arrayN - 1) / 2) * d);
+        this.subPatches.setMatrixAt(k++, m4);
+      }
+      this.subarray.add(this.subPatches);
+    }
+    const c = new THREE.Color();
+    let k = 0;
+    for (let i = 0; i < p.arrayN; i++) for (let j = 0; j < p.arrayN; j++) this.subPatches!.setColorAt(k++, phaseColor(i * sol.pattern.phaseStepX + j * sol.pattern.phaseStepY, c));
+    this.subPatches!.instanceColor!.needsUpdate = true;
+  }
+
+  demoView(stage: string): { pos: THREE.Vector3; target: THREE.Vector3 } | null {
+    if (stage === 'satellite') return { pos: v3(-5.6, -1.6, 6.4), target: v3(0.2, -0.45, 0.2) };
+    if (stage === 'array-focus') return { pos: this.arrayTile.clone().add(v3(-0.2, -0.32, 0.26)), target: this.arrayTile.clone() };
+    return null;
   }
 
   private applyHeat(state = this.ctx.store.get()): void {
@@ -344,13 +413,14 @@ export class SatelliteLevel extends BaseLevel {
       setHeat(this.obc, 0);
       return;
     }
-    const sys = evaluateSystem(systemInput(state.params));
+    const sys = solveSystem(state.params);
     setHeat(this.payload, Math.min(1, sys.payloadDcW / 2500));
     setHeat(this.obc, 0.35);
   }
 
   protected tick(dt: number): void {
     this.beam.visible = this.mode === 'signal' && this.alpha > 0.5;
+    this.subarray.visible = this.mode === 'signal';
     this.earth.update(this.time);
     const ea = THREE.MathUtils.smoothstep(this.alpha, 0.85, 1);
     this.earth.setOpacity(ea);
