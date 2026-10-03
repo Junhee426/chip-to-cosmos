@@ -339,6 +339,7 @@ export class HeroDemo {
   // ------------------------------------------------------------------ grating (~10 s)
   private async grating(): Promise<boolean> {
     const s = this.store;
+    this.say('WHY 0.5λ MATTERS', 'Element spacing and grating lobes', 'Opening the Beam Lab…');
     await this.untilStopped(this.mgr.preload(['array', 'cosmos']));
     if (this.cancelled) return false;
     this.enter('g-main');
@@ -381,6 +382,7 @@ export class HeroDemo {
   private async engineering(): Promise<boolean> {
     const s = this.store;
     this.enter('satellite');
+    this.say('PHASED-ARRAY DOWNLINK', 'From element phase to the ground', 'Flying to the satellite…');
     if (!(await this.toSatellite(2.8))) return false;
     s.set({ mode: 'signal', explode: 0, selected: null, emphasis: null });
     s.setParams(BEAM_PRESETS.find((p) => p.id === 'nadir')!.params);
