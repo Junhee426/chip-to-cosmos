@@ -55,7 +55,8 @@ async function open(query, [viewport, extra] = DESKTOP, more = {}) {
   const page = await ctx.newPage();
   page.setDefaultTimeout(180000); // software rendering: screenshots and clicks can be slow
   page.on('pageerror', (e) => results.errors.push(e.message));
-  page.on('console', (m) => m.type() === 'error' && results.errors.push(`console: ${m.text()}`));
+  // font requests are blocked on purpose (offline, deterministic); their ERR_FAILED is not an app error
+  page.on('console', (m) => m.type() === 'error' && !m.text().includes('net::ERR_FAILED') && results.errors.push(`console: ${m.text()}`));
   await page.goto(`${url}/${query}`);
   await page.waitForFunction(() => document.body.classList.contains('ready') && window.c2c, null, { timeout: 180000 });
   return { ctx, page };
