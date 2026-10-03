@@ -6,8 +6,9 @@ import { createEarth } from '../graphics/earth';
 import { COLORS, mat } from '../graphics/materials';
 import { FlowPath, pointsMaterial, syncPointScale } from '../graphics/particles';
 import { v3 } from '../graphics/geometry';
-import { BaseLevel, type Anchor } from './base';
+import { BaseLevel, type Anchor, type OrbitState } from './base';
 import { beamSolution } from '../app/system';
+import { POSTER_STATE, POSTER_STEER } from '../app/beam-presets';
 import type { Vec3 } from '../models/frames';
 import type { View } from '../graphics/camera';
 
@@ -21,6 +22,14 @@ const MAX_FP = 96;
 /** poster pose relative to the satellite–footprint midpoint, scene units (Re = 10) */
 const POSTER_POSE = { side: 1.35, up: 0.10, along: -0.85, lift: 0.03 };
 const POSTER_HERO_SCALE = 3.4;
+/** Try-it sweep the poster frame must hold without moving the camera (reference steer = POSTER_STATE) */
+const POSTER_FIT_STEERS = [POSTER_STEER.min, 25, POSTER_STEER.max];
+const POSTER_FIT_MARGIN_PX = 10;
+/** terminal marker size relative to the overview marker while the poster is shown */
+const POSTER_TERMINAL_SCALE = 0.3;
+
+/** poster: the hero is shown at a fixed enlargement so its Earth-facing aperture reads (illustrative size) */
+const posterHeroScale = (aspect: number) => POSTER_HERO_SCALE * Math.sqrt(Math.min(2.2, Math.max(1, 1.25 / aspect)));
 
 interface Shell {
   planes: number;
@@ -247,7 +256,7 @@ export class CosmosLevel extends BaseLevel {
   }
 
   protected onModeChanged(mode: EngMode): void {
-    this.poster = this.ctx.store.get().presentation;
+    this.setPoster(this.ctx.store.get().presentation);
     if (!this.belts) return;
     this.belts.userData.hidden = mode !== 'radiation';
     (this.isl.material as THREE.LineBasicMaterial).opacity = mode === 'signal' ? 0.45 : 0.08;
@@ -266,7 +275,7 @@ export class CosmosLevel extends BaseLevel {
   }
 
   onState(state: AppState, changed: Set<string>): void {
-    if (changed.has('presentation')) this.poster = state.presentation;
+    if (changed.has('presentation')) this.setPoster(state.presentation);
     // applied once per rendered frame in tick (a drag never runs the model per input event)
     if (['params.arrayN', 'params.spacingLambda', 'params.steerDeg', 'params.steerAzDeg', 'params.weighting', 'params.altitudeKm', 'params.freqGHz'].some((k) => changed.has(k))) this.fpDirty = true;
     void state;
@@ -411,15 +420,28 @@ export class CosmosLevel extends BaseLevel {
     const rootScale = this.root.getWorldScale(this.tmpA).x || 1;
     const d = cam.getWorldPosition(this.tmpA).distanceTo(this.hero.getWorldPosition(this.tmpB)) / rootScale;
     const k = THREE.MathUtils.clamp(d / 8, 0.04, 1);
-    // poster: the hero is shown at a fixed enlargement so its Earth-facing aperture reads (illustrative size)
     const aspect = (cam as THREE.PerspectiveCamera).aspect;
-    this.hero.scale.setScalar(this.poster ? POSTER_HERO_SCALE * Math.sqrt(Math.min(2.2, Math.max(1, 1.25 / aspect))) : k);
-    this.user.scale.setScalar(k);
-    this.fpCenter.scale.setScalar(Math.max(k, 0.3));
+    this.hero.scale.setScalar(this.poster ? posterHeroScale(aspect) : k);
+    // poster: the terminal is a small point inside the contour, never a glow that covers it
+    this.user.scale.setScalar(this.poster ? k * POSTER_TERMINAL_SCALE : k);
+    this.fpCenter.scale.setScalar(this.poster ? 0.3 : Math.max(k, 0.3));
+
     this.beam.scale.x = this.beam.scale.z = k;
   }
 
   private poster = false;
+
+  /** Presentation look: a denser −3 dB fill so the contour reads as an area at poster scale. */
+  private setPoster(v: boolean): void {
+    this.poster = v;
+    const m = this.fpFill?.material as THREE.MeshBasicMaterial | undefined;
+    if (!m) return;
+    const base = v ? 0.5 : 0.28;
+    const fade = m.userData.fade as { baseOpacity: number } | undefined;
+    if (fade) fade.baseOpacity = base;
+    m.opacity = base;
+    this.markOpacityDirty();
+  }
 
   /**
    * Hero-demo framings. 'poster' is the project's signature frame: the satellite (Earth-facing
@@ -431,17 +453,27 @@ export class CosmosLevel extends BaseLevel {
       const up = this.heroPos.clone().normalize();
       const along = this.heroVel.clone();
       const side = new THREE.Vector3().crossVectors(along, up).normalize();
-      const ground = this.fpLabel.position.clone().applyMatrix4(this.heroBasis);
+      const params = this.ctx.store.get().params;
+      // Anchor on the reference steer so the frame does not depend on where the Try-it slider is.
+      const ref = beamSolution({ ...params, steerDeg: POSTER_STATE.steerDeg! }).footprint.center;
+      const ground = ref ? this.toWorld(ref) : this.fpLabel.position.clone().applyMatrix4(this.heroBasis);
       const mid = ground.clone().lerp(this.heroPos, 0.5);
-      const aspect = (this.ctx.camera as THREE.PerspectiveCamera | undefined)?.aspect ?? 1.6;
+      const cam = this.ctx.camera as THREE.PerspectiveCamera | undefined;
+      const aspect = cam?.aspect ?? 1.6;
       // Reserve vertical room for the title and the metrics/controls card.
       // Portrait also reserves the 0–50° Try-it sweep; the camera stays fixed
       // while the beam moves, so steering never appears to move the panel.
-      const k = Math.min(3.2, Math.max(1.65, 1.45 / aspect));
+      const k0 = Math.min(3.2, Math.max(1.65, 1.45 / aspect));
       if (aspect < 0.8) mid.addScaledVector(along, 0.22);
       // Camera below the nadir deck sees the radiating face; local radial up makes
       // Earth read as ground beneath the satellite at every orbit position.
-      return { pos: mid.clone().addScaledVector(side, POSTER_POSE.side * k).addScaledVector(up, POSTER_POSE.up * k).addScaledVector(along, POSTER_POSE.along * k), target: mid.addScaledVector(up, POSTER_POSE.lift), up };
+      const target = mid.clone().addScaledVector(up, POSTER_POSE.lift);
+      const dir = new THREE.Vector3().addScaledVector(side, POSTER_POSE.side).addScaledVector(up, POSTER_POSE.up).addScaledVector(along, POSTER_POSE.along);
+      const at = (k: number) => mid.clone().addScaledVector(dir, k);
+      // Back off only as far as needed for the satellite and every −3 dB contour point of
+      // the 0/25/50° sweep to sit inside the safe viewport (computed from scratch: no drift).
+      const k = cam ? this.fitPoster(cam, at, target, up, this.posterFitPoints(params, aspect), k0) : k0;
+      return { pos: at(k), target, up };
     }
     if (stage !== 'earth-footprint' && stage !== 'link') return null;
     this.updateOrbits();
@@ -461,6 +493,74 @@ export class CosmosLevel extends BaseLevel {
     return { pos: mid.clone().addScaledVector(side, 1.15 * k).addScaledVector(up, 0.42 * k).addScaledVector(along, -0.2 * k), target: mid };
   }
 
+  /** canonical-frame km (Earth centred) → this level's units at the current orbit position */
+  private toWorld(g: Vec3): THREE.Vector3 {
+    return new THREE.Vector3(g[0], g[1], g[2]).multiplyScalar(S * LIFT).applyMatrix4(this.heroBasis);
+  }
+
+  /** Satellite body corners (at poster enlargement) and the −3 dB contours of the Try-it sweep. */
+  private posterFitPoints(params: AppState['params'], aspect: number): THREE.Vector3[] {
+    const pts: THREE.Vector3[] = [];
+    const h = posterHeroScale(aspect);
+    for (const x of [-0.0175, 0.0175]) for (const y of [-0.011, 0.009]) for (const z of [-0.01, 0.01]) pts.push(new THREE.Vector3(x * h, y * h, z * h).applyQuaternion(this.hero.quaternion).add(this.heroPos));
+    const steers = new Set([...POSTER_FIT_STEERS, Math.min(POSTER_STEER.max, Math.max(POSTER_STEER.min, params.steerDeg))]);
+    for (const steerDeg of steers) {
+      // sample solutions only — the store parameters are never touched
+      const f = beamSolution({ ...params, steerDeg }).footprint;
+      for (const g of f.contour) pts.push(this.toWorld(g));
+      if (f.center) pts.push(this.toWorld(f.center));
+    }
+    return pts;
+  }
+
+  private fitCam = new THREE.PerspectiveCamera();
+  /** Smallest pose scale ≥ k0 that keeps every point inside the safe viewport (label insets). */
+  private fitPoster(cam: THREE.PerspectiveCamera, at: (k: number) => THREE.Vector3, target: THREE.Vector3, up: THREE.Vector3, pts: THREE.Vector3[], k0: number): number {
+    const W = innerWidth;
+    const H = innerHeight;
+    const ins = this.ctx.labels.insets;
+    const ex = this.ctx.labels.exclusions;
+    const m = POSTER_FIT_MARGIN_PX;
+    const fc = this.fitCam;
+    fc.fov = cam.fov;
+    fc.aspect = W / H;
+    fc.near = 0.001;
+    fc.far = 1000;
+    // same principal-point shift the viewport controller applies for these insets
+    fc.setViewOffset(W, H, -((ins.left + W - ins.right) / 2 - W / 2), -((ins.top + H - ins.bottom) / 2 - H / 2), W, H);
+    const v = new THREE.Vector3();
+    const fits = (k: number) => {
+      fc.position.copy(at(k));
+      fc.up.copy(up);
+      fc.lookAt(target);
+      fc.updateMatrixWorld(true);
+      fc.updateProjectionMatrix();
+      for (const p of pts) {
+        v.copy(p).project(fc);
+        if (v.z <= -1 || v.z >= 1) return false;
+        const sx = (v.x * 0.5 + 0.5) * W;
+        const sy = (-v.y * 0.5 + 0.5) * H;
+        if (sx < ins.left + m || sx > W - ins.right - m || sy < ins.top + m || sy > H - ins.bottom - m) return false;
+        for (const e of ex) if (sx > e.left - m && sx < e.right + m && sy > e.top - m && sy < e.bottom + m) return false;
+      }
+      return true;
+    };
+    if (fits(k0)) return k0;
+    let lo = k0;
+    let hi = k0 * 1.5;
+    while (!fits(hi)) {
+      lo = hi;
+      hi *= 1.5;
+      if (hi > k0 * 8) return k0; // safe area too small to hold everything: keep the designed frame
+    }
+    for (let i = 0; i < 18; i++) {
+      const mid = (lo + hi) / 2;
+      if (fits(mid)) hi = mid;
+      else lo = mid;
+    }
+    return hi;
+  }
+
   /** Reproducible poster: back to the reference orbit position. */
   resetOrbit(): void {
     this.orbitT = 0;
@@ -472,6 +572,18 @@ export class CosmosLevel extends BaseLevel {
     this.paused = v;
   }
   private paused = false;
+
+  orbitState(): OrbitState {
+    return { time: this.orbitT, paused: this.paused };
+  }
+
+  setOrbitState(s: Partial<OrbitState>): void {
+    if (s.paused !== undefined) this.paused = s.paused;
+    if (s.time !== undefined && s.time !== this.orbitT) {
+      this.orbitT = s.time;
+      this.updateOrbits();
+    }
+  }
 
   private fpDirty = false;
 

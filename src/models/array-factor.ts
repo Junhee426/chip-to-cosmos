@@ -418,16 +418,8 @@ export function sphericalFootprint(directions: Vec3[], axis: Vec3, altitudeKm: n
   const ref = center ?? (contour.length ? normalizeTo(contour.reduce((a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]] as Vec3, [0, 0, 0] as Vec3), EARTH_RADIUS_KM) : null);
   let alongTrackKm = 0, crossTrackKm = 0, areaKm2 = 0;
   if (ref && contour.length >= 3) {
-    const n = normalize(ref);
-    let a = sub(orbit.x, [n[0] * dot(orbit.x, n), n[1] * dot(orbit.x, n), n[2] * dot(orbit.x, n)]);
-    if (len(a) < 1e-6) a = [0, 0, 1];
-    a = normalize(a);
-    const c = cross(n, a);
     let minA = Infinity, maxA = -Infinity, minC = Infinity, maxC = -Infinity, area = 0;
-    const loc = contour.map((p) => {
-      const r = sub(p, ref);
-      return [dot(r, a), dot(r, c)] as [number, number];
-    });
+    const loc = tangentPlaneKm(contour, ref, orbit.x);
     loc.forEach(([x, y], i) => {
       minA = Math.min(minA, x); maxA = Math.max(maxA, x);
       minC = Math.min(minC, y); maxC = Math.max(maxC, y);
@@ -449,6 +441,23 @@ export function sphericalFootprint(directions: Vec3[], axis: Vec3, altitudeKm: n
     crossTrackKm: finite(crossTrackKm),
     areaKm2: finite(areaKm2),
   };
+}
+
+/**
+ * Local tangent plane at `ref` (Earth-centred km): x along the ground track
+ * (`alongTrack` projected into the plane), y = n × x across it. Equal km on both axes.
+ * The footprint extents above are measured in exactly this plane.
+ */
+export function tangentPlaneKm(points: Vec3[], ref: Vec3, alongTrack: Vec3): [number, number][] {
+  const n = normalize(ref);
+  let a = sub(alongTrack, [n[0] * dot(alongTrack, n), n[1] * dot(alongTrack, n), n[2] * dot(alongTrack, n)]);
+  if (len(a) < 1e-6) a = [0, 0, 1];
+  a = normalize(a);
+  const c = cross(n, a);
+  return points.map((p) => {
+    const r = sub(p, ref);
+    return [dot(r, a), dot(r, c)] as [number, number];
+  });
 }
 
 function normalizeTo(a: Vec3, r: number): Vec3 {

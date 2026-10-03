@@ -14,7 +14,7 @@ import { createStars } from './graphics/earth';
 import type { LevelContext } from './scenes/base';
 import { Hud } from './ui/hud';
 import { Intro } from './ui/intro';
-import { HeroDemo, type DemoMode } from './ui/hero-demo';
+import { HeroDemo, type DemoMode, type DemoScreens } from './ui/hero-demo';
 import { Poster } from './ui/poster';
 import { POSTER_STATE } from './app/beam-presets';
 import { PRESENTATION_LABELS, XRAY_TARGETS, type XrayKey } from './app/xray';
@@ -74,8 +74,9 @@ async function boot(): Promise<void> {
   mgr.motionScale = motion;
   const navigate = (id: LevelId) => {
     if (intro.running) return;
-    // any navigation request ends the demo first — it never traps the user
-    if (demo.running) void demo.skip().then(() => mgr.goTo(id));
+    // any navigation request ends the demo first — it never traps the user — and its
+    // destination is the final state (the demo does not restore its starting screen over it)
+    if (demo.running) void demo.stop('navigate').then(() => mgr.goTo(id));
     else void mgr.goTo(id);
   };
   const back = () => {
@@ -86,10 +87,15 @@ async function boot(): Promise<void> {
     else if (p) navigate(p);
   };
   /** leave presentation mode: chrome returns, the scene and parameters stay as they are */
-  const explore = () => {
+  const leavePresentation = () => {
     store.set({ presentation: false });
     poster.setView('hidden');
-    for (const l of mgr.levelsBuilt()) if (l.id === 'cosmos') (l as unknown as { orbitPaused: boolean }).orbitPaused = false;
+    for (const l of mgr.levelsBuilt()) l.setOrbitState({ paused: false });
+  };
+  /** "Explore freely": also ends a running demo, keeping its current results */
+  const explore = () => {
+    if (demo.running) void demo.stop('explore').then(leavePresentation);
+    else leavePresentation();
   };
   const runDemo = (mode: DemoMode) => {
     if (intro.running) return;
@@ -124,41 +130,85 @@ async function boot(): Promise<void> {
   });
 
   const poster = new Poster(store, { runQuick: () => runDemo('quick'), runEngineering: () => runDemo('engineering'), runGrating: () => runDemo('grating'), explore });
-  hud.mountPoster(poster.top, poster.bottom);
+  hud.mountPoster(poster.top, poster.bottom, poster.inset.el);
   poster.setView('hidden');
-  const demo = new HeroDemo(mgr, rig, store, hud, poster, motion, (mode) => {
-    // quick demo ends on the interactive poster (Try it); the others hand over to free exploration
-    if (mode === 'engineering') hud.toast('Now try it: STEER, ARRAY SIZE, SPACING, TAPER — or the Grating lobe experiment.', { label: 'Open Beam Lab', run: () => navigate('array') });
-    if (mode === 'grating') hud.toast('Try it: move SPACING in BEAM LAB across the limit and back.', { label: 'Open Beam Lab', run: () => navigate('array') });
-  });
-  /** `?view=poster`: the reproducible signature frame (fixed state, fixed orbit position). */
-  const showPoster = async () => {
-    await mgr.jumpTo('cosmos');
-    store.set({ mode: 'signal', presentation: true, selected: null, emphasis: null });
-    store.setParams(POSTER_STATE);
-    const cosmos = mgr.current as unknown as { resetOrbit: () => void; orbitPaused: boolean; demoView: (s: string) => { pos: THREE.Vector3; target: THREE.Vector3 } | null };
-    cosmos.resetOrbit();
-    cosmos.orbitPaused = true;
+  /** Compose the Cosmos poster over the given state (the overlay appears only once Cosmos is current). */
+  const composePoster: DemoScreens['poster'] = async ({ state, params, orbit, camera }) => {
+    if (mgr.current?.id !== 'cosmos') await mgr.jumpTo('cosmos');
+    const cosmos = mgr.current!;
+    store.set({ mode: 'signal', selected: null, emphasis: null, ...state, presentation: true });
+    store.setParams(params);
+    cosmos.setOrbitState(orbit ? { ...orbit } : { time: 0, paused: true });
     poster.setView('poster');
     viewport.layout();
     await new Promise((r) => requestAnimationFrame(r));
-    const v = cosmos.demoView('poster');
+    const v = camera ?? cosmos.demoView('poster');
     if (v) {
       rig.controls.minDistance = 0;
       rig.setView(v);
     }
+    posterReframe.framed();
   };
-  /** first screen: the real satellite scene behind a title and one call to action */
-  const showLanding = () => {
-    store.set({ mode: 'signal', presentation: true });
-    store.setParams({ ...POSTER_STATE, steerDeg: 0 });
+  /** Compose the Satellite landing (the overlay appears only once the satellite is current). */
+  const composeLanding: DemoScreens['landing'] = async ({ state, params, camera }) => {
+    if (mgr.current?.id !== 'satellite') await mgr.jumpTo('satellite');
+    store.set({ mode: 'signal', ...state, presentation: true });
+    store.setParams(params);
     poster.setView('landing');
-    const v = mgr.current?.demoView('opening');
+    viewport.layout();
+    const v = camera ?? mgr.current?.demoView('opening');
     if (v) {
       rig.controls.maxDistance = Math.max(rig.controls.maxDistance, v.pos.distanceTo(v.target) * 1.1);
       rig.setView(v);
     }
   };
+  const demo = new HeroDemo(mgr, rig, store, hud, poster, { poster: composePoster, landing: composeLanding, leavePresentation, layout: () => viewport.layout() }, motion, (mode) => {
+    // quick demo ends on the interactive poster (Try it); the others hand over to free exploration
+    if (mode === 'engineering') hud.toast('Now try it: STEER, ARRAY SIZE, SPACING, TAPER — or the Grating lobe experiment.', { label: 'Open Beam Lab', run: () => navigate('array') });
+    if (mode === 'grating') hud.toast('Try it: move SPACING in BEAM LAB across the limit and back.', { label: 'Open Beam Lab', run: () => navigate('array') });
+  });
+  /** `?view=poster`: the reproducible signature frame (fixed state, fixed orbit position). */
+  const showPoster = () => composePoster({ state: { mode: 'signal' }, params: POSTER_STATE, orbit: { time: 0, paused: true } });
+  /** first screen: the real satellite scene behind a title and one call to action */
+  const showLanding = () => composeLanding({ state: { mode: 'signal' }, params: { ...POSTER_STATE, steerDeg: 0 } });
+
+  /**
+   * Poster framing depends on the viewport. After a resize (window, visual viewport,
+   * orientation) it is recomputed once the size has settled, never during a camera flight
+   * or scale step, from the current orbit and parameters (nothing is reset).
+   */
+  const posterReframe = (() => {
+    let pending = false;
+    let last = 0;
+    let size = '';
+    const key = () => `${innerWidth}x${innerHeight}`;
+    return {
+      framed: () => {
+        pending = false;
+        size = key();
+      },
+      request: () => {
+        pending = true;
+        last = performance.now();
+      },
+      tick: () => {
+        if (!pending || performance.now() - last < 150) return;
+        if (poster.view !== 'poster') {
+          if (!demo.running) pending = false;
+          return;
+        }
+        if (rig.flying || mgr.isBusy || mgr.current?.id !== 'cosmos') return;
+        pending = false;
+        if (key() === size) return;
+        viewport.layout();
+        const v = mgr.current.demoView('poster');
+        if (!v) return;
+        rig.controls.minDistance = 0;
+        rig.setView(v);
+        size = key();
+      },
+    };
+  })();
 
   // ---- performance: adaptive quality + overlay (decoration first; content never removed) ----
   perf = new PerformanceController(
@@ -190,7 +240,10 @@ async function boot(): Promise<void> {
   );
   const perfCtl = perf;
   perfCtl.toggleOverlay(params.has('perf'));
-  viewport.onResize = () => perfCtl.pause();
+  viewport.onResize = () => {
+    perfCtl.pause();
+    posterReframe.request();
+  };
   document.addEventListener('visibilitychange', () => perfCtl.pause());
 
   // ---- level lifecycle: labels, static merge, graphics, shader pre-warm ----
@@ -295,13 +348,14 @@ async function boot(): Promise<void> {
   const demoParam = params.get('demo');
   if (view === 'poster') await showPoster();
   else if (params.has('demo')) void demo.play(demoParam === 'engineering' || demoParam === 'grating' ? demoParam : 'quick');
-  else if (!startLevel && !params.has('nointro')) showLanding();
+  else if (!startLevel && !params.has('nointro')) await showLanding();
   void seen;
 
   // ---- frame ----
   new RenderLoop(({ dt, raw, elapsed }) => {
     perfCtl.beginFrame();
     viewport.tick(dt);
+    posterReframe.tick();
     // Scripted camera flights share the wall clock used by demo holds/steering.
     // Physical/decorative simulation below still uses the clamped step.
     rig.update(demo.running ? raw : dt);

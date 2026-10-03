@@ -52,6 +52,8 @@ export class LabelLayer {
   /** hard cap for small screens (mobile shows few, essential callouts) */
   maxLabels = Infinity;
   insets: Insets = { left: 90, right: 380, top: 90, bottom: 110 };
+  /** overlay boxes inside the safe area (screen px, as left/top/right/bottom edges) that framing keeps clear */
+  exclusions: Insets[] = [];
 
   constructor(parent: HTMLElement) {
     this.host = document.createElement('div');

@@ -53,6 +53,12 @@ const smooth = (a: number, b: number, x: number): number => {
   return t * t * (3 - 2 * t);
 };
 
+/** Animated orbit position (seconds of time-lapse) and whether it is frozen. */
+export interface OrbitState {
+  time: number;
+  paused: boolean;
+}
+
 /**
  * Base class for one scale level. Subclasses build geometry in `build()` and
  * register components; this class provides mode dimming, exploded view,
@@ -98,6 +104,14 @@ export abstract class BaseLevel {
   demoView(_stage: string): View | null {
     return null;
   }
+
+  /** Orbital animation state; null for levels without orbital motion. */
+  orbitState(): OrbitState | null {
+    return null;
+  }
+
+  /** Restore/freeze orbital motion (no-op for levels without one). */
+  setOrbitState(_s: Partial<OrbitState>): void {}
 
   /** React to parameter changes. */
   onState(_state: AppState, _changed: Set<string>): void {}

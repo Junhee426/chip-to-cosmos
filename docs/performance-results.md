@@ -309,3 +309,69 @@ retained route; reduced motion ends on the poster with a working slider.
 
 Not done here: first-visitor comprehension test (suggested: 4 of 5 explain phase → beam →
 footprint → link), real iPhone/Surface/GPU timing, screen-reader pass.
+
+# V4 follow-up verification (2026-10-03, base 22fe9b2 → feature/v4-followup)
+
+Chromium 141.0.7390.37 headless, **SWIFTSHADER** (CPU rasteriser), font requests blocked.
+Desktop 1440 × 900 DPR 1; mobile = **EMULATED** 390 × 844, DPR 3, touch (Auto quality renders at
+DPR 0.75 there). No hardware GPU, no real iPhone/Surface, no first-visitor comprehension test.
+Harness: `scripts/demo-flows.mjs` (real buttons; see docs/demo-state-contract.md).
+
+## Demo state contract — same harness on both builds
+
+| Scenario (real UI path) | base 22fe9b2 | follow-up |
+|---|---|---|
+| poster (steer 40°) → Replay → Skip at q-phase | ✗ ends at `level=array` with the poster card | ✓ Cosmos poster, steer 40°, orbit t=0 paused, camera Δ 0 |
+| … Skip at q-beam / q-footprint | ✗ orbit resumed / Skip unreachable | ✓ / ✓ |
+| landing → Run → Skip at q-beam | ✗ landing card over Cosmos | ✓ Satellite landing, camera Δ 0 |
+| explore (thermal, labels off, N=12, 33°) → ▶ Beam demo → Skip | ✗ (harness wait too short on base; state restored) | ✓ store restored, stays at the settled level, rail navigation works |
+| poster → Why 0.5λ matters / Engineering demo: start | ✗ poster card + presentation kept | ✓ card gone, presentation off, signal + labels |
+| … completion | ✗ poster card over exploration | ✓ Cosmos overview (camera = home, Δ ≈ 1e-13), orbit running, results kept, toast on top, callout → inspector |
+| poster → Engineering → Skip | ✗ `level=array` + poster | ✓ poster with the user's 10° and orbit |
+| navigation (scale rail) during Engineering | ✗ (no reason tracking; level reached) | ✓ PAYLOAD is final, reason `navigate` |
+| double Skip / Skip → immediate Replay | ✗ / ✗ (base has no end reason; Replay state correct) | ✓ / ✓ |
+| Skip during preparation | ✓ | ✓ |
+| Explore freely in the Link segment (slider 45°) | ✗ (no reason; state correct) | ✓ exploration, orbit running, 45° kept |
+| Try-it slider in the Link segment | ✗ (no reason; state correct) | ✓ poster keeps 12° |
+| resize 1440 ↔ 390 at 0/25/50° | ✓ (old frame happened to fit; not reframed) | ✓ reframed at each size, back to Δ 0 at 1440 |
+| **total** | **5 / 20** | **20 / 20**, 0 page errors |
+
+Additional follow-up checks (5/5): SATELLITE and COSMOS (orbit t = 0, 13, 37 s) panel normal ·
+nadir = 1.000000000 with the attitude unchanged (q ≡ −q) for θ 0/40°, φ 0/90/180°; steering changes
+the beam axis; reduced motion Quick → poster with a working slider (planned 7.8 s); reduced-motion
+Skip → landing.
+
+The reported resize defect (centre x ≈ 486 px) did not reproduce with this procedure on the base;
+the follow-up recomputes the frame anyway. Found during verification: on a software renderer the
+caption fade stalled during the Cosmos transition and made **Skip** invisible for ~3 s — now only
+the caption text fades.
+
+## Mobile footprint (390 × 844 emulated, poster)
+
+Projected 3D contour bounding box: 24 × 3.6 px (0°), 30 × 3.3 px (25°), 80 × 5.6 px (50°); before,
+25° was ≈ 31 × 3.5 px under the terminal glow. The terminal marker is now 0.3× in presentation and
+the fill denser, so the outline is no longer covered, but it is still a sliver: the poster shows
+the **Footprint detail · enlarged** inset (same BeamSolution, solver tangent plane, equal axes,
+km scale bar).
+
+## Quick Demo timing (single runs, no `demoHold`, desktop then mobile — never concurrent)
+
+`first` = ▶ Run from the landing; `replay` = ▶ Replay on the finished poster. `cold` = the app had
+to build a level during preparation (after a completed run at Cosmos, BEAM LAB is evicted).
+Base has no timing API: only the harness wall time (click → demo idle).
+
+| build | viewport | run | preparation | playback | finish | total | planned (critical path) | harness |
+|---|---|---|---|---|---|---|---|---|
+| base | desktop | first | – | – | – | – | 14.0 s | 32.5 s |
+| base | desktop | replay | – | – | – | – | 15.2 s | 31.0 s |
+| base | mobile | first | – | – | – | – | 14.0 s | 27.6 s |
+| base | mobile | replay | – | – | – | – | 15.2 s | 29.9 s |
+| follow-up | desktop | first (warm) | 0.01 s | 28.29 s | 0.01 s | 28.30 s | 14.0 s | 31.4 s |
+| follow-up | desktop | replay (cold) | 0.13 s | 27.98 s | 0.00 s | 28.11 s | 15.2 s | 31.0 s |
+| follow-up | mobile | first (warm) | 0.01 s | 25.44 s | 0.00 s | 25.45 s | 14.0 s | 27.3 s |
+| follow-up | mobile | replay (cold) | 0.12 s | 24.55 s | 0.00 s | 24.67 s | 15.2 s | 25.8 s |
+
+Playback exceeds the 14 s design on this CPU rasteriser (parameter tweens advance per rendered
+frame; scale steps keep the dt cap). These numbers are not phone/laptop timings and do not show
+whether the demo completes in 15 s on real hardware. The earlier report's 20.5 / 16.2 s were taken
+with Auto quality in a different session; this table uses `balanced` for both builds.

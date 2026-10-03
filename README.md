@@ -142,6 +142,11 @@ scripts/hero.mjs       V4 hero harness: 10+ captures (Earth-facing array, Quick 
                        Quick/Engineering/Grating demos, Try it, skip-restores, reduced motion,
                        ?view=poster reproducibility, X-ray emphasis), per-moment CPU cost and
                        repeated Quick Demo runs (frame stats + GPU resource counts)
+scripts/demo-flows.mjs demo state-contract harness: Skip/complete/navigate/explore from landing, poster
+                       and free exploration via the real buttons, end-of-demo races, poster resize
+                       round trips at 0/25/50°, panel attitude, reduced motion, captures and
+                       cold/warm Quick timing (CHROMIUM_PATH, url and out-dir are arguments;
+                       see docs/demo-state-contract.md)
 npm run profile:beam   stage-by-stage cost of the beam model (opt-in Vitest profile)
 ```
 

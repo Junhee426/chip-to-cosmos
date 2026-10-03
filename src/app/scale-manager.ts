@@ -337,10 +337,7 @@ export class ScaleManager {
     lvl.setLevelAlpha(1);
     lvl.setMode(this.store.get().mode);
     lvl.setCutaway(this.store.get().cutaway);
-    const c = this.rig.controls;
-    c.minDistance = lvl.radius * (lvl.id === 'cosmos' ? 1.25 : 0.25);
-    c.maxDistance = lvl.radius * (lvl.id === 'cosmos' ? 9 : 6);
-    c.update();
+    this.applyControlLimits(lvl);
     this.ctx.labels.setActiveGroup(lvl.id);
     this.store.set({ level: lvl.id, explode: 0, selected: null });
     this.onArrive(lvl.id);
@@ -362,6 +359,15 @@ export class ScaleManager {
       );
     };
     idle(next);
+  }
+
+  /** The orbit-control zoom range of a level (scripted framings may relax it temporarily). */
+  applyControlLimits(lvl: BaseLevel | null = this.current): void {
+    if (!lvl) return;
+    const c = this.rig.controls;
+    c.minDistance = lvl.radius * (lvl.id === 'cosmos' ? 1.25 : 0.25);
+    c.maxDistance = lvl.radius * (lvl.id === 'cosmos' ? 9 : 6);
+    c.update();
   }
 
   update(dt: number): void {

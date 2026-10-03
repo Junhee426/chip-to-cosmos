@@ -66,3 +66,57 @@ describe('poster state', () => {
     }
   });
 });
+
+describe('demo end policy (V4 follow-up)', () => {
+  it('maps every mode × reason × starting screen to one end action', async () => {
+    const { endAction } = await import('../src/app/demo-state');
+    // completion
+    expect(endAction('quick', 'complete', 'landing')).toEqual({ kind: 'poster' });
+    expect(endAction('engineering', 'complete', 'poster')).toEqual({ kind: 'overview' });
+    expect(endAction('grating', 'complete', 'hidden')).toEqual({ kind: 'overview' });
+    // skip / error go back to where the demo started
+    expect(endAction('quick', 'skip', 'landing')).toEqual({ kind: 'restore', screen: 'landing' });
+    expect(endAction('quick', 'skip', 'poster')).toEqual({ kind: 'restore', screen: 'poster' });
+    expect(endAction('grating', 'skip', 'poster')).toEqual({ kind: 'restore', screen: 'poster' });
+    expect(endAction('quick', 'skip', 'hidden')).toEqual({ kind: 'restore', screen: 'stay' });
+    expect(endAction('quick', 'error', 'poster')).toEqual({ kind: 'restore', screen: 'poster' });
+    // explicit user intents are never overridden by a restore
+    for (const start of ['landing', 'poster', 'hidden'] as const) {
+      expect(endAction('quick', 'navigate', start)).toEqual({ kind: 'release' });
+      expect(endAction('quick', 'explore', start)).toEqual({ kind: 'explore' });
+    }
+  });
+
+  it('screen snapshots clone the camera and orbit (no live references)', async () => {
+    const THREE = await import('three');
+    const { snapshotScreen, sameViewport } = await import('../src/app/demo-state');
+    const cam = { pos: new THREE.Vector3(1, 2, 3), target: new THREE.Vector3(0, 0, 0), up: new THREE.Vector3(0, 1, 0) };
+    const orbit = { time: 12.5, paused: true };
+    const snap = snapshotScreen('poster', 'cosmos', cam, { width: 390, height: 844 }, orbit);
+    cam.pos.set(9, 9, 9);
+    cam.up!.set(1, 0, 0);
+    orbit.time = 0;
+    expect(snap.camera!.pos.toArray()).toEqual([1, 2, 3]);
+    expect(snap.camera!.up!.toArray()).toEqual([0, 1, 0]);
+    expect(snap.orbit).toEqual({ time: 12.5, paused: true });
+    expect(sameViewport(snap.viewport, { width: 390, height: 844 })).toBe(true);
+    expect(sameViewport(snap.viewport, { width: 1440, height: 900 })).toBe(false);
+  });
+});
+
+describe('footprint tangent plane (inset source)', () => {
+  it('the exported projection reproduces the solver extents exactly, with equal km on both axes', async () => {
+    const { tangentPlaneKm } = await import('../src/models/array-factor');
+    const { canonicalOrbit } = await import('../src/models/frames');
+    for (const steerDeg of [0, 25, 50]) {
+      const p: Params = { ...DEFAULT_PARAMS, ...sanitizeParams({ ...POSTER_STATE, steerDeg }) };
+      const f = beamSolution(p).footprint;
+      const pts = tangentPlaneKm(f.contour, f.center!, canonicalOrbit(p.altitudeKm).x);
+      const span = (i: 0 | 1) => Math.max(...pts.map((q) => q[i])) - Math.min(...pts.map((q) => q[i]));
+      expect(span(0)).toBeCloseTo(f.alongTrackKm, 9);
+      expect(span(1)).toBeCloseTo(f.crossTrackKm, 9);
+      // the centre is the origin of the plane
+      expect(tangentPlaneKm([f.center!], f.center!, [1, 0, 0])[0]).toEqual([0, 0]);
+    }
+  });
+});

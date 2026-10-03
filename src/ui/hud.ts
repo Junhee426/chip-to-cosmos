@@ -7,6 +7,7 @@ import { THEORY } from '../content/theory';
 import type { ModelMeta } from '../models/meta';
 import { SIGNAL_CHAIN } from '../models/rf';
 import type { ComponentDef } from '../scenes/base';
+import type { Insets } from '../graphics/labels';
 import { buildAnalysis, type Analysis } from './analysis';
 import { fx, h } from './dom';
 
@@ -78,6 +79,7 @@ export class Hud {
   private qualityNote!: HTMLElement;
   sheetExpanded = false;
   private mobile = false;
+  private posterInset: HTMLElement | null = null;
   private causal!: HTMLElement;
   private causalPrev = new Map<CausalStage, string>();
   private causalStage: CausalStage | null = null;
@@ -345,13 +347,24 @@ export class Hud {
   private posterBottom: HTMLElement | null = null;
 
   /** Presentation-mode overlay (title, metrics, Try-it): part of the safe-viewport computation. */
-  mountPoster(top: HTMLElement, bottom: HTMLElement): void {
+  mountPoster(top: HTMLElement, bottom: HTMLElement, inset?: HTMLElement): void {
     this.posterTop = top;
     this.posterBottom = bottom;
+    this.posterInset = inset ?? null;
     this.root.append(top, bottom);
+    if (inset) this.root.append(inset);
     const ro = new ResizeObserver(() => this.cb.layout());
     ro.observe(top);
     ro.observe(bottom);
+    if (inset) ro.observe(inset);
+  }
+
+  /** Overlay boxes inside the safe viewport that the 3D framing must keep clear (px rects). */
+  exclusions(): Insets[] {
+    const e = this.posterInset;
+    if (!e || e.hidden || !this.store.get().presentation) return [];
+    const r = e.getBoundingClientRect();
+    return r.width && r.height && getComputedStyle(e).display !== 'none' ? [{ left: r.left, top: r.top, right: r.right, bottom: r.bottom }] : [];
   }
 
   /** The demo caption lives in the HUD so the safe viewport can keep the beam clear of it. */
