@@ -31,6 +31,8 @@ export class Poster {
   constructor(private store: Store, actions: PosterActions) {
     this.top = h('div', 'pst-top');
     this.top.innerHTML = `<div class="pst-brand">CHIP TO COSMOS</div><div class="pst-thesis">FROM ELEMENT PHASE<br>TO COMMUNICATION COVERAGE</div>`;
+    const chain = h('div', 'pst-chain', 'Satellite → Earth-facing array → Beam → −3 dB footprint → Link');
+    this.top.append(chain);
     this.landing = h('div', 'pst-landing');
     this.landing.innerHTML = `<p class="pst-lead">A phased array on the satellite's Earth-facing deck. Change the element phase, and the beam — and the area it serves on Earth — moves. Every number is calculated.</p>`;
     const run = h('button', 'pst-btn primary', '▶ Run 15-second demo');
@@ -58,7 +60,7 @@ export class Poster {
     b('▶ Replay', actions.runQuick);
     b('Engineering demo', actions.runEngineering);
     b('Why 0.5λ matters', actions.runGrating);
-    const note = h('div', 'pst-note', 'Calculated: gain, footprint, link · Illustrative: camera path, satellite size');
+    const note = h('div', 'pst-note', 'Calculated: beam, −3 dB footprint & link · Satellite enlarged for visibility');
     this.bottom.append(this.metrics, this.tryIt, arow, note);
     store.subscribe((s, c) => {
       if (this.view === 'poster' && (c.has('params') || c.has('presentation'))) this.render(s);
@@ -67,6 +69,7 @@ export class Poster {
 
   setView(v: PosterView): void {
     this.view = v;
+    document.body.dataset.posterView = v;
     this.top.dataset.view = v;
     this.bottom.dataset.view = v;
     this.top.hidden = v === 'hidden';

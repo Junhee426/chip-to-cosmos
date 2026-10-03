@@ -52,6 +52,8 @@ export class CameraRig {
 
   setView(v: View): void {
     this.camera.position.copy(v.pos);
+    // A direct poster URL and a flight must use the same local vertical.
+    this.camera.up.copy(v.up ?? new THREE.Vector3(0, 1, 0)).normalize();
     this.controls.target.copy(v.target);
     this.camera.lookAt(v.target);
     this.controls.update();

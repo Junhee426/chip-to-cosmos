@@ -318,7 +318,12 @@ export class ArrayLevel extends BaseLevel {
       case 'wavefront':
         return { pos: v3(24, 6, 6).addScaledVector(a, 2), target: a.clone().multiplyScalar(5) };
       case 'pattern':
-        return { pos: v3(26, 10, 26), target: a.clone().multiplyScalar(5) };
+        {
+          const target = a.clone().multiplyScalar(5);
+          const aspect = (this.ctx.camera as THREE.PerspectiveCamera | undefined)?.aspect ?? 1.6;
+          const k = Math.min(1.7, Math.max(1, 0.75 / aspect));
+          return { pos: target.clone().add(v3(26, 10, 26).sub(target).multiplyScalar(k)), target };
+        }
       case 'footprint':
         return { pos: v3(30, 30, 30), target: v3(0, GROUND_Y * 0.62, 0).add(this.footLabel.position.clone().setY(0).multiplyScalar(0.5)) };
       default:

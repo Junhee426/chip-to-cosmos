@@ -44,6 +44,7 @@ export interface TransitionInfo {
 export class ScaleManager {
   private levels = new Map<LevelId, BaseLevel>();
   private pending = new Map<LevelId, Promise<BaseLevel>>();
+  private retained = new Map<LevelId, number>();
   current: BaseLevel | null = null;
   transition: TransitionInfo | null = null;
   private busy = false;
@@ -178,6 +179,33 @@ export class ScaleManager {
         await this.ensure(id);
       } catch (e) {
         console.warn(`preload of ${id} failed`, e);
+      }
+    }
+  }
+
+  /** Keep the already-prewarmed demo route resident until its completion/skip. */
+  retainLevels(ids: LevelId[]): () => void {
+    for (const id of ids) this.retained.set(id, (this.retained.get(id) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      for (const id of ids) {
+        const n = (this.retained.get(id) ?? 1) - 1;
+        if (n) this.retained.set(id, n);
+        else this.retained.delete(id);
+      }
+      this.evictInactive();
+    };
+  }
+
+  private evictInactive(): void {
+    if (!this.current) return;
+    const keep = residentSet(this.current.id);
+    for (const [id, l] of [...this.levels]) {
+      if (!keep.has(id) && !this.retained.has(id)) {
+        l.dispose();
+        this.levels.delete(id);
       }
     }
   }
@@ -318,12 +346,7 @@ export class ScaleManager {
     this.onArrive(lvl.id);
     // GPU residency: keep only current, parent and children
     const keep = residentSet(lvl.id);
-    for (const [id, l] of [...this.levels]) {
-      if (!keep.has(id)) {
-        l.dispose();
-        this.levels.delete(id);
-      }
-    }
+    this.evictInactive();
     // stream neighbours one at a time when the main thread is idle (avoids an arrival hitch)
     const todo = [...keep].filter((id) => !this.levels.has(id));
     const next = () => {

@@ -63,6 +63,22 @@ function setup(overrides: Partial<Record<LevelId, () => Promise<LevelCtor>>> = {
 }
 
 describe('ScaleManager navigation', () => {
+  it('keeps the prewarmed Quick Demo route resident and releases it afterwards', async () => {
+    const { mgr, built, disposed } = setup();
+    await mgr.jumpTo('satellite');
+    const release = mgr.retainLevels(['satellite', 'array', 'cosmos']);
+    await mgr.preload(['satellite', 'array', 'cosmos']);
+    await mgr.goTo('array');
+    expect(disposed).not.toContain('cosmos');
+    await mgr.goTo('cosmos');
+    expect(built.filter((id) => id === 'cosmos')).toHaveLength(1);
+    expect(disposed).not.toContain('array');
+    release();
+    release(); // cancelling/finishing twice must not leak or double-dispose
+    expect(disposed.filter((id) => id === 'array')).toHaveLength(1);
+    expect(mgr.levelsBuilt().map((l) => l.id)).not.toContain('array');
+  });
+
   it('walks the tree step by step and renormalises at the destination', async () => {
     const { mgr, store } = setup();
     await mgr.jumpTo('satellite');
