@@ -109,7 +109,7 @@ describe('footprint tangent plane (inset source)', () => {
     const { tangentPlaneKm } = await import('../src/models/array-factor');
     const { canonicalOrbit } = await import('../src/models/frames');
     for (const steerDeg of [0, 25, 50]) {
-      const p = sanitizeParams({ ...DEFAULT_PARAMS, ...POSTER_STATE, steerDeg });
+      const p: Params = { ...DEFAULT_PARAMS, ...sanitizeParams({ ...POSTER_STATE, steerDeg }) };
       const f = beamSolution(p).footprint;
       const pts = tangentPlaneKm(f.contour, f.center!, canonicalOrbit(p.altitudeKm).x);
       const span = (i: 0 | 1) => Math.max(...pts.map((q) => q[i])) - Math.min(...pts.map((q) => q[i]));

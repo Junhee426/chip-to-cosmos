@@ -404,9 +404,11 @@ body[data-gfx='performance'] .rail, body[data-gfx='performance'] .panel, body[da
 @keyframes causal-flash { from { color: var(--accent); } to { color: var(--text-primary); } }
 
 /* demo caption: compact, top-centre under the causal strip (kept out of the beam by the safe viewport) */
-.hero-demo { position: absolute; top: 132px; left: calc(var(--rail-w) + 36px); right: calc(var(--panel-w) + 32px); margin: 0 auto; max-width: 620px; display: none; align-items: flex-start; gap: 12px; padding: 10px 12px 10px 14px; border-radius: 10px; background: rgba(6, 10, 18, 0.82); border: 1px solid var(--line-strong); opacity: 0; transform: translateY(-4px); transition: opacity 0.35s, transform 0.35s; }
+.hero-demo { position: absolute; top: 132px; left: calc(var(--rail-w) + 36px); right: calc(var(--panel-w) + 32px); margin: 0 auto; max-width: 620px; display: none; align-items: flex-start; gap: 12px; padding: 10px 12px 10px 14px; border-radius: 10px; background: rgba(6, 10, 18, 0.82); border: 1px solid var(--line-strong); }
 .hero-demo.on { display: flex; }
-.hero-demo.show { opacity: 1; transform: none; }
+/* only the caption fades between scenes; Skip stays visible and clickable the whole time */
+.hero-demo .hd-text { opacity: 0; transform: translateY(-4px); transition: opacity 0.35s, transform 0.35s; }
+.hero-demo.show .hd-text { opacity: 1; transform: none; }
 .hd-text { flex: 1; min-width: 0; }
 .hd-kicker { font-size: 10px; letter-spacing: 0.22em; color: var(--accent); }
 .hd-title { font-size: 15px; margin: 2px 0; color: var(--text-primary); }
