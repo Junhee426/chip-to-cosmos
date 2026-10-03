@@ -284,3 +284,28 @@ updates footprint and strip; Explore freely; Esc restores mode/params/chrome; X-
 `?view=poster` reproducible; Engineering Demo completes; reduced motion; landing; grating demo
 (lobe + secondary footprint); array compare. EMULATED 390×844, 430×932, 844×390: Quick Demo →
 poster with satellite and footprint unobstructed, no target < 44 px, Try-it by touch.
+
+# V4 fix verification (2026-10-03, base 9fb5076 → feature/v4-fix)
+
+Chromium headless, **SWIFTSHADER**, font requests blocked (system-font fallback). Mobile = **EMULATED**
+390 × 844, DPR 3, touch. No hardware-GPU or real-device measurement.
+
+| Quick Demo, single run, no hold extension | planned (critical path) | wall |
+|---|---|---|
+| V4 main (previous report, 1280 × 800) | 15.3 s (overlap double-counted) | 87–90 s |
+| fix, desktop 1440 × 900, Auto | 14.0 s | 23.3 s |
+| fix, mobile 390 × 844 DPR 3, Auto | 14.0 s | 19.2 s |
+
+Wall time falls because scripted camera flights now follow the wall clock (the simulation keeps its
+0.1 s dt cap). This is not a statement about 15 s on real devices.
+
+Acceptance (18/18, 0 page errors): landing without title/causal overlap or horizontal overflow
+(desktop, mobile); poster overlays do not overlap; at θ₀ = 0/25/50° the full projected −3 dB contour
+(72 points) and the hero lie inside the free viewport (desktop, mobile); key callouts present under
+Auto quality; Quick Demo end equals `?view=poster` (camera, target, up, params) on desktop and mobile;
+panel normal · nadir = 1.0 and quaternion fixed for θ 0/40°, φ 0/90/180° (SATELLITE) and at 3 orbit
+positions (COSMOS); Skip restores mode/labels/params/presentation/poster view and releases the
+retained route; reduced motion ends on the poster with a working slider.
+
+Not done here: first-visitor comprehension test (suggested: 4 of 5 explain phase → beam →
+footprint → link), real iPhone/Surface/GPU timing, screen-reader pass.
