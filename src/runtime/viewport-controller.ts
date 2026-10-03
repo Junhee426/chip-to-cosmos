@@ -5,6 +5,8 @@ import type { LabelLayer, Insets } from '../graphics/labels';
 export interface ViewportHost {
   /** free 3D area not covered by chrome (px from each edge) */
   insets(): Insets;
+  /** overlay boxes inside the safe area (e.g. the enlarged footprint inset) */
+  exclusions?(): Insets[];
   readonly isMobile: boolean;
 }
 
@@ -38,6 +40,7 @@ export class ViewportController {
     if (!this.host) return;
     const ins = this.host.insets();
     this.labels.insets = ins;
+    this.labels.exclusions = this.host.exclusions?.() ?? [];
     this.labels.maxLabels = this.host.isMobile ? MOBILE_MAX_LABELS : Infinity;
     const W = innerWidth;
     const H = innerHeight;

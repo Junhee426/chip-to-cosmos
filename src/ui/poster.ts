@@ -2,6 +2,7 @@ import { POSTER_STEER } from '../app/beam-presets';
 import type { AppState, Store } from '../app/state';
 import { beamSolution } from '../app/system';
 import { h, slider } from './dom';
+import { FootprintInset } from './footprint-inset';
 
 export type PosterView = 'hidden' | 'landing' | 'demo' | 'poster';
 
@@ -22,6 +23,8 @@ export interface PosterActions {
 export class Poster {
   readonly top: HTMLElement;
   readonly bottom: HTMLElement;
+  /** enlarged footprint detail (shown on narrow screens, see CSS) */
+  readonly inset = new FootprintInset();
   private metrics: HTMLElement;
   private landing: HTMLElement;
   private tryIt: HTMLElement;
@@ -74,6 +77,7 @@ export class Poster {
     this.bottom.dataset.view = v;
     this.top.hidden = v === 'hidden';
     this.bottom.hidden = v !== 'poster';
+    this.inset.el.hidden = v !== 'poster';
     this.landing.hidden = v !== 'landing';
     if (v === 'poster') this.render(this.store.get());
   }
@@ -83,6 +87,7 @@ export class Poster {
     const f = b.footprint;
     const L = b.link;
     this.steer.set(s.params.steerDeg);
+    this.inset.render(s.params);
     const tile = (k: string, label: string, value: string, unit: string) => `<div class="pst-m" data-k="${k}"><span>${label}</span><b>${value}</b><em>${unit}</em></div>`;
     this.metrics.innerHTML = [
       tile('array', 'ARRAY', `${b.input.arrayN}×${b.input.arrayN}`, `${b.input.spacingLambda.toFixed(2)}λ · θ₀ ${b.input.steerThetaDeg}°`),

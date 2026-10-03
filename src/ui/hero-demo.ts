@@ -1,10 +1,11 @@
 import type { LevelId } from '../app/navigation';
 import type { ScaleManager } from '../app/scale-manager';
-import type { Store } from '../app/state';
+import type { AppState, Params, Store } from '../app/state';
 import { beamSolution } from '../app/system';
 import { BEAM_PRESETS, GRATING_SPACING, POSTER_STATE } from '../app/beam-presets';
-import { restorePatch, snapshotDemoState, type DemoSnapshot } from '../app/demo-state';
-import type { CameraRig } from '../graphics/camera';
+import { endAction, restorePatch, sameViewport, snapshotDemoState, snapshotScreen, type DemoSnapshot, type DemoTiming, type PresentationSnapshot, type StopReason } from '../app/demo-state';
+import type { CameraRig, View } from '../graphics/camera';
+import type { OrbitState } from '../scenes/base';
 import { easeInOutSine } from '../graphics/camera';
 import type { CausalStage, Hud } from './hud';
 import type { Poster } from './poster';
@@ -31,6 +32,21 @@ const CAUSAL_OF: Partial<Record<DemoStage, CausalStage>> = {
 /** test hook: ?demoHold=N lengthens reading holds (slow software renderers need time to capture) */
 const HOLD_SCALE = Math.max(1, Math.min(10, Number(new URLSearchParams(location.search).get('demoHold')) || 1));
 const NEAR_SATELLITE = new Set<LevelId>(['satellite', 'array', 'cosmos', 'payload']);
+const ROUTE: LevelId[] = ['satellite', 'array', 'cosmos'];
+
+/** Screens the demo hands back to; implemented by the app (they own the poster/landing composition). */
+export interface DemoScreens {
+  /** Cosmos poster over this state. No orbit → reference position; no camera → fitted poster frame. */
+  poster(o: { state: Partial<AppState>; params: Partial<Params>; orbit?: OrbitState | null; camera?: View | null }): Promise<void>;
+  /** Satellite landing over this state. No camera → the landing frame for the current viewport. */
+  landing(o: { state: Partial<AppState>; params: Partial<Params>; camera?: View | null }): Promise<void>;
+  /** Leave presentation where we are: poster hidden, chrome back, orbit running. */
+  leavePresentation(): void;
+  /** Recompute the safe viewport now (after overlays changed). */
+  layout(): void;
+}
+
+const signedDb = (x: number) => `${x >= 0 ? '+' : '−'}${Math.abs(x).toFixed(1)}`;
 
 /**
  * One skippable, real-time demo controller. It drives the real app — ScaleManager flights
@@ -42,20 +58,32 @@ export class HeroDemo {
   private kicker: HTMLElement;
   private title: HTMLElement;
   private sub: HTMLElement;
-  private cancelled = false;
   private snapshot: DemoSnapshot | null = null;
-  private previousPosterView: Poster['view'] = 'hidden';
+  private screen: PresentationSnapshot | null = null;
+  private limits: { min: number; max: number } | null = null;
   private releaseLevels: (() => void) | null = null;
+  /** session token: bumps on every play(), invalidating detached continuations of older runs */
+  private token = 0;
+  private stopReason: StopReason | null = null;
+  private ending = false;
+  private run: Promise<void> | null = null;
+  private wake: () => void = () => {};
+  private stopped: Promise<void> = Promise.resolve();
+  private playStart = 0;
   running = false;
   mode: DemoMode | null = null;
   stage: DemoStage | null = null;
   /** designed duration of the last run (flights + parameter animations + holds), seconds */
   plannedSeconds = 0;
-  /** wall-clock duration of the last completed run, seconds */
+  /** wall-clock duration (play() entry → final screen) of the last completed run, seconds */
   lastWallSeconds = 0;
   preparationSeconds = 0;
+  /** timing of the last run, whatever ended it */
+  timing: DemoTiming | null = null;
+  /** the last run's end reason (complete / skip / navigate / explore / error) */
+  lastReason: StopReason | null = null;
 
-  constructor(private mgr: ScaleManager, private rig: CameraRig, private store: Store, private hud: Hud, private poster: Poster, private motion: number, private onFinish: (mode: DemoMode) => void) {
+  constructor(private mgr: ScaleManager, private rig: CameraRig, private store: Store, private hud: Hud, private poster: Poster, private screens: DemoScreens, private motion: number, private onFinish: (mode: DemoMode) => void) {
     this.el = h('div', 'hero-demo');
     this.el.setAttribute('role', 'region');
     this.el.setAttribute('aria-label', 'Beam demo');
@@ -76,7 +104,21 @@ export class HeroDemo {
     this.el.classList.add('show');
   }
 
+  private get cancelled(): boolean {
+    return this.stopReason !== null;
+  }
+
+  private alive(token: number): boolean {
+    return token === this.token && this.stopReason === null;
+  }
+
+  /** Resolve with the promise, or early (undefined) once the run is stopped. */
+  private untilStopped<T>(p: Promise<T>): Promise<T | undefined> {
+    return Promise.race([p, this.stopped.then(() => undefined)]);
+  }
+
   private enter(stage: DemoStage): void {
+    if (!this.playStart) this.playStart = performance.now();
     this.stage = stage;
     document.body.dataset.demoStage = stage;
     delete document.body.dataset.demoReady;
@@ -89,7 +131,8 @@ export class HeroDemo {
     this.plannedSeconds += ms / 1000;
     if (this.stage) document.body.dataset.demoReady = this.stage;
     const end = performance.now() + ms * HOLD_SCALE;
-    while (!this.cancelled && performance.now() < end) await new Promise((r) => setTimeout(r, 40));
+    const token = this.token;
+    while (this.alive(token) && performance.now() < end) await new Promise((r) => setTimeout(r, 40));
   }
 
   private async frame(stage: string, seconds: number): Promise<void> {
@@ -112,9 +155,10 @@ export class HeroDemo {
     }
     this.plannedSeconds += ms / 1000;
     const t0 = performance.now();
+    const token = this.token;
     return new Promise((res) => {
       const step = () => {
-        if (this.cancelled) return res();
+        if (!this.alive(token)) return res();
         const t = Math.min(1, (performance.now() - t0) / ms);
         apply(easeInOutSine(t));
         if (t < 1) requestAnimationFrame(step);
@@ -132,8 +176,20 @@ export class HeroDemo {
     return ok && !this.cancelled && this.mgr.current?.id === level;
   }
 
+  private setOrbit(o: Partial<OrbitState>): void {
+    for (const l of this.mgr.levelsBuilt()) l.setOrbitState(o);
+  }
+
   private pauseOrbit(v: boolean): void {
-    for (const l of this.mgr.levelsBuilt()) if (l.id === 'cosmos') (l as unknown as { orbitPaused: boolean }).orbitPaused = v;
+    this.setOrbit({ paused: v });
+  }
+
+  private orbitNow(): OrbitState | null {
+    for (const l of this.mgr.levelsBuilt()) {
+      const o = l.orbitState();
+      if (o) return o;
+    }
+    return null;
   }
 
   /** Start at the satellite: animated when close in the tree, a cut otherwise. */
@@ -146,27 +202,72 @@ export class HeroDemo {
     return this.go('satellite', step);
   }
 
-  async play(mode: DemoMode = 'engineering'): Promise<void> {
-    if (this.running) return;
+  /**
+   * Run one demo. Resolves only after the final screen is composed and cleanup is done
+   * (so a following Replay/navigation always starts from a settled state). While a run
+   * is active, further calls return that run's promise.
+   */
+  play(mode: DemoMode = 'engineering'): Promise<void> {
+    if (this.run) return this.run;
+    const token = ++this.token;
+    this.run = this.execute(mode, token).finally(() => {
+      if (this.token === token) this.run = null;
+    });
+    return this.run;
+  }
+
+  private async execute(mode: DemoMode, token: number): Promise<void> {
+    const t0 = performance.now();
     this.running = true;
-    this.cancelled = false;
+    this.stopReason = null;
+    this.ending = false;
+    this.stopped = new Promise<void>((r) => (this.wake = r));
     this.mode = mode;
     this.plannedSeconds = 0;
-    this.snapshot = snapshotDemoState(this.store.get());
-    this.previousPosterView = this.poster.view;
-    this.releaseLevels = this.mgr.retainLevels(['satellite', 'array', 'cosmos']);
+    this.playStart = 0;
+    // Both snapshots are taken before the demo changes anything.
+    const st = this.store.get();
+    this.snapshot = snapshotDemoState(st);
+    const settled = !this.mgr.isBusy && !this.rig.flying;
+    this.screen = snapshotScreen(this.poster.view, settled ? this.mgr.currentId : null, settled ? this.rig.currentView() : null, { width: innerWidth, height: innerHeight }, this.orbitNow());
+    this.limits = { min: this.rig.controls.minDistance, max: this.rig.controls.maxDistance };
+    const built = new Set(this.mgr.levelsBuilt().map((l) => l.id));
+    const cold = ROUTE.some((id) => !built.has(id));
+    this.releaseLevels = this.mgr.retainLevels(ROUTE);
     this.el.classList.add('on');
     document.body.classList.add('demo-running');
     document.body.dataset.demoMode = mode;
-    const t0 = performance.now();
+    if (mode !== 'quick') {
+      // Engineering / Grating are exploration demos: never inherit the poster or presentation.
+      this.poster.setView('hidden');
+      this.store.set({ presentation: false, mode: 'signal', labels: true, explode: 0, selected: null, emphasis: null });
+    }
     let completed = false;
+    let error: unknown = null;
     try {
       completed = await (mode === 'quick' ? this.quick() : mode === 'grating' ? this.grating() : this.engineering());
       completed = completed && !this.cancelled;
-    } finally {
-      if (completed) this.lastWallSeconds = (performance.now() - t0) / 1000;
-      this.finish(completed);
+    } catch (e) {
+      error = e;
+      console.error(e);
     }
+    const playEnd = performance.now();
+    const reason: StopReason = completed ? 'complete' : error ? 'error' : this.stopReason ?? 'error';
+    await this.finish(mode, reason, token);
+    const end = performance.now();
+    const prep = this.playStart ? this.playStart - t0 : playEnd - t0;
+    this.timing = {
+      mode,
+      reason,
+      preparationMs: prep,
+      playbackMs: this.playStart ? playEnd - this.playStart : 0,
+      finishMs: end - playEnd,
+      totalMs: end - t0,
+      plannedPlaybackMs: this.plannedSeconds * 1000,
+      cold,
+    };
+    this.preparationSeconds = prep / 1000;
+    if (reason === 'complete') this.lastWallSeconds = (end - t0) / 1000;
   }
 
   // ------------------------------------------------------------------ quick (~15 s)
@@ -175,9 +276,8 @@ export class HeroDemo {
     s.set({ presentation: true, mode: 'signal', labels: true, explode: 0, selected: null, emphasis: null });
     this.poster.setView('demo');
     this.say('GETTING READY', 'Preparing the live beam demo', 'The panel stays fixed; element phase steers the beam.');
-    const prepStart = performance.now();
-    await this.mgr.preload(['satellite', 'array', 'cosmos']);
-    this.preparationSeconds = (performance.now() - prepStart) / 1000;
+    await this.untilStopped(this.mgr.preload(ROUTE));
+    if (this.cancelled) return false;
     this.enter('q-satellite');
     if (!(await this.toSatellite())) return false;
     s.setParams({ ...POSTER_STATE, steerDeg: 0 });
@@ -188,7 +288,7 @@ export class HeroDemo {
     if (this.cancelled) return false;
     this.enter('q-phase');
     const target = POSTER_STATE.steerDeg!;
-    this.say('ELEMENT PHASE', 'Element phase&nbsp;&nbsp;→&nbsp;&nbsp;beam direction', 'θ₀ = 0°');
+    this.say('ELEMENT PHASE', 'Element phase sets the beam direction.', 'θ₀ = 0°');
     await Promise.all([
       this.frame('array-focus', 1.3),
       this.tween(2200, (t) => {
@@ -205,7 +305,7 @@ export class HeroDemo {
     if (this.cancelled) return false;
     this.enter('q-beam');
     const b = beamSolution(s.get().params);
-    this.say('BEAM', 'Phase changes steer the beam; the panel stays fixed', `Gain ${b.pattern.gainDbi.toFixed(1)} dBi · width ${b.pattern.hpbwDeg.toFixed(1)}° · array-local close-up`);
+    this.say('BEAM', 'The panel stays fixed; the beam steers.', `Gain ${b.pattern.gainDbi.toFixed(1)} dBi · width ${b.pattern.hpbwDeg.toFixed(1)}° · array-local close-up`);
     if (!(await this.go('array', 1.5))) return false;
     await this.frame('pattern', 0.6);
     await this.hold(700);
@@ -213,29 +313,34 @@ export class HeroDemo {
     if (this.cancelled) return false;
     this.enter('q-footprint');
     const f = b.footprint;
-    this.say('FOOTPRINT', 'The −3 dB contour lands on the spherical Earth', f.center ? `${km(f.alongTrackKm)} × ${km(f.crossTrackKm)} km · ${km(f.nadirOffsetKm ?? 0)} km from nadir` : 'Beam centre above the horizon');
+    this.say('FOOTPRINT', 'The −3 dB outline is the beam’s half-power contour on Earth.', f.center ? `${km(f.alongTrackKm)} × ${km(f.crossTrackKm)} km · ${km(f.nadirOffsetKm ?? 0)} km from nadir` : 'Beam centre above the horizon');
     if (!(await this.go('cosmos', 1.0))) return false;
-    this.pauseOrbit(true);
-    (this.mgr.current as unknown as { resetOrbit: () => void }).resetOrbit();
+    this.mgr.current?.setOrbitState({ time: 0, paused: true });
     await this.frame('poster', 1.0);
     await this.hold(300);
 
     if (this.cancelled) return false;
     this.enter('q-poster');
     const link = beamSolution(s.get().params).link;
-    this.say('LINK', link && link.marginDb >= 0 ? 'The ground terminal has a positive link margin' : 'The link needs more margin', link ? `${link.marginDb.toFixed(1)} dB above the model’s required signal quality · try steering below` : 'The beam does not reach the Earth');
+    if (link) this.say('LINK', `Link margin at the beam-centre terminal: ${signedDb(link.marginDb)} dB`, link.marginDb >= 0 ? 'Above the model’s required signal quality · try steering below' : 'Below the model’s required signal quality · try steering below');
+    else this.say('LINK', 'No link: the beam centre misses the Earth', 'The model has no ground terminal for this steering.');
     this.poster.setView('poster');
     await this.hold(3000);
+    if (this.cancelled) return false;
+    // outro: caption away, the poster's own overlays (footprint inset) take their place;
+    // settle on exactly the frame a direct ?view=poster load computes for this layout
     this.el.classList.remove('on', 'show');
-    await this.hold(600);
+    document.body.classList.remove('demo-running');
+    this.screens.layout();
+    await this.frame('poster', 0.6);
     return true;
   }
 
   // ------------------------------------------------------------------ grating (~10 s)
   private async grating(): Promise<boolean> {
     const s = this.store;
-    s.set({ mode: 'signal', explode: 0, selected: null, emphasis: null });
-    await this.mgr.preload(['array', 'cosmos']);
+    await this.untilStopped(this.mgr.preload(['array', 'cosmos']));
+    if (this.cancelled) return false;
     this.enter('g-main');
     if (this.mgr.current?.id !== 'array') {
       if (!NEAR_SATELLITE.has(this.store.get().level)) await this.mgr.jumpTo('satellite');
@@ -342,38 +447,131 @@ export class HeroDemo {
     return true;
   }
 
-  /**
-   * Stop at once. Skipping returns the parameters, mode and presentation state the user
-   * had before the demo (navigation stays where it is — the user is never trapped).
-   */
-  async skip(): Promise<void> {
-    if (!this.running) return;
-    this.cancelled = true;
-    this.mgr.stop();
-    this.rig.finishFlight();
-    while (this.running) await new Promise((r) => setTimeout(r, 30));
+  /** Skip: back to the screen the demo started from (see endAction()). */
+  skip(): Promise<void> {
+    return this.stop('skip');
   }
 
-  private finish(completed: boolean): void {
-    this.pauseOrbit(completed && this.mode === 'quick');
-    const mode = this.mode!;
-    this.running = false;
+  /**
+   * End the running demo for a reason and wait until its final screen is composed.
+   * Repeated calls share the same run promise. An explicit navigate/explore replaces an
+   * earlier skip that has not started restoring yet (the latest intent wins); once the
+   * end is being composed, the caller's own follow-up (goTo / leave presentation) runs
+   * after it and so still decides the final state.
+   */
+  stop(reason: Exclude<StopReason, 'complete' | 'error'> = 'skip'): Promise<void> {
+    if (!this.run) return Promise.resolve();
+    if (!this.ending && (this.stopReason === null || reason !== 'skip')) this.stopReason = reason;
+    this.wake();
+    // a scale step in flight still completes (renormalisation is never left half-done)
+    this.mgr.stop();
+    this.rig.finishFlight();
+    return this.run;
+  }
+
+  private async finish(mode: DemoMode, reason: StopReason, token: number): Promise<void> {
+    this.ending = true;
+    this.lastReason = reason;
     this.stage = null;
     delete document.body.dataset.demoStage;
     delete document.body.dataset.demoReady;
-    delete document.body.dataset.demoMode;
     this.el.classList.remove('on', 'show');
-    document.body.classList.remove('demo-running');
     this.hud.setCausal(null, false);
-    if (!completed && this.snapshot) {
-      const r = restorePatch(this.snapshot);
-      this.store.set(r.state);
-      this.store.setParams(r.params);
-      this.poster.setView(this.previousPosterView);
+    try {
+      // never compose the end screen on top of a half-finished scale step
+      while (this.mgr.isBusy) {
+        this.mgr.stop();
+        this.rig.finishFlight();
+        await new Promise((r) => setTimeout(r, 30));
+      }
+      if (token === this.token) await this.compose(mode, reason);
+    } catch (e) {
+      console.error(e);
+      this.recover(mode);
+    } finally {
+      // retention is released exactly once, after the end screen is in use
+      this.releaseLevels?.();
+      this.releaseLevels = null;
+      this.snapshot = null;
+      this.screen = null;
+      this.limits = null;
+      this.running = false;
+      this.ending = false;
+      delete document.body.dataset.demoMode;
+      document.body.classList.remove('demo-running');
     }
-    this.releaseLevels?.();
-    this.releaseLevels = null;
-    this.snapshot = null;
-    if (completed) this.onFinish(mode);
+    if (reason === 'complete') this.onFinish(mode);
+    else if (reason === 'error') this.hud.toast('The demo stopped before it finished. The scene is ready to explore.', { label: 'Run again', run: () => void this.play(mode) });
+  }
+
+  private async compose(mode: DemoMode, reason: StopReason): Promise<void> {
+    const snap = this.snapshot!;
+    const scr = this.screen!;
+    const act = endAction(mode, reason, scr.view);
+    const r = restorePatch(snap);
+    const same = sameViewport(scr.viewport, { width: innerWidth, height: innerHeight });
+    switch (act.kind) {
+      case 'poster':
+        // Quick completed: the signature poster (state and orbit were set by the run; the user's
+        // Try-it slider moves during the last reading hold are kept)
+        this.pauseOrbit(true);
+        if (this.poster.view !== 'poster') this.poster.setView('poster');
+        return;
+      case 'overview': {
+        this.poster.setView('hidden');
+        if (this.store.get().presentation) this.store.set({ presentation: false });
+        const cur = this.mgr.current;
+        if (cur?.id === 'cosmos') {
+          // frame first, then let the orbit run: the overview is Earth-fixed, so motion never breaks it
+          await this.rig.flyTo(cur.home, Math.max(0.05, 1.2 * this.motion), easeInOutSine);
+          this.mgr.applyControlLimits(cur);
+        }
+        this.pauseOrbit(false);
+        return;
+      }
+      case 'explore':
+        this.screens.leavePresentation();
+        return;
+      case 'release':
+        this.store.set({ ...r.state, presentation: false });
+        this.store.setParams(r.params);
+        this.poster.setView('hidden');
+        this.pauseOrbit(false);
+        return;
+      case 'restore':
+        if (act.screen === 'landing') {
+          await this.screens.landing({ state: r.state, params: r.params, camera: same && scr.level === 'satellite' ? scr.camera : null });
+          if (scr.orbit) this.setOrbit({ paused: scr.orbit.paused });
+        } else if (act.screen === 'poster') {
+          await this.screens.poster({ state: r.state, params: r.params, orbit: scr.orbit, camera: same && scr.level === 'cosmos' ? scr.camera : null });
+        } else {
+          // free exploration: stay in the current (settled) scene; never transplant another level's camera
+          this.store.set(r.state);
+          this.store.setParams(r.params);
+          this.poster.setView(scr.view === 'demo' ? 'hidden' : scr.view);
+          this.setOrbit({ paused: scr.orbit?.paused ?? false });
+          if (scr.camera && scr.level === this.mgr.currentId) {
+            this.rig.setView(scr.camera);
+            if (this.limits) {
+              this.rig.controls.minDistance = this.limits.min;
+              this.rig.controls.maxDistance = this.limits.max;
+            }
+          }
+        }
+        return;
+    }
+  }
+
+  /** Last resort after a failed restore: a usable, explorable scene with the starting parameters. */
+  private recover(mode: DemoMode): void {
+    void mode;
+    try {
+      if (this.snapshot) this.store.setParams(restorePatch(this.snapshot).params);
+      this.screens.leavePresentation();
+      this.rig.cancelFlight();
+      this.mgr.applyControlLimits();
+    } catch (e) {
+      console.error(e);
+    }
   }
 }

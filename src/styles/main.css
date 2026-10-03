@@ -491,6 +491,17 @@ body[data-poster-view='landing'] .hud.presentation .causal { display: none; }
 .pst-try .ctl { margin: 0; }
 .pst-try .ctl-name { color: var(--accent); letter-spacing: 0.08em; }
 .pst-note { font-size: 10.5px; color: var(--text-muted); }
+/* enlarged footprint detail: narrow portrait screens only, never during a demo */
+.fp-inset { display: none; position: absolute; z-index: 15; margin: 0; padding: 6px 8px 5px; border-radius: 10px; background: rgba(6, 10, 18, 0.8); border: 1px solid var(--line); pointer-events: none; }
+.fp-inset[hidden] { display: none !important; }
+.fp-title { font-size: 8.5px; letter-spacing: 0.14em; color: var(--text-muted); }
+.fp-svg svg { display: block; }
+.fp-area { fill: rgba(91, 192, 255, 0.42); stroke: #e8f6ff; stroke-width: 1.4; stroke-linejoin: round; }
+.fp-term { fill: #ffd28a; stroke: #0b111c; stroke-width: 1; }
+.fp-tlabel, .fp-blabel, .fp-axis { font: 8px var(--mono); fill: var(--text-secondary); }
+.fp-bar { stroke: var(--text-primary); stroke-width: 2; }
+.fp-cap { font-size: 9.5px; color: var(--text-secondary); }
+.fp-cap b { color: var(--text-primary); font-weight: 600; }
 
 @media (max-width: 900px), (max-height: 520px) and (pointer: coarse) {
   .hud.presentation .causal { top: calc(8px + env(safe-area-inset-top)); left: 8px; right: 8px; }
@@ -513,10 +524,12 @@ body[data-poster-view='landing'] .hud.presentation .causal { display: none; }
   body[data-poster-view='poster'] .pst-actions .pst-btn:nth-child(n + 3) { display: none; }
   body[data-poster-view='poster'] .callout-sub { display: block; white-space: normal; font-size: 9px; }
   body[data-poster-view='poster'] .callout { max-width: 148px; }
+  body[data-poster-view='poster']:not(.demo-running) .fp-inset { display: block; right: 8px; top: calc(126px + env(safe-area-inset-top)); }
 }
 @media (max-height: 520px) and (pointer: coarse) and (orientation: landscape) {
   .pst-bottom { left: auto; right: 8px; width: min(46vw, 400px); }
   .pst-actions .pst-btn:nth-child(n + 3) { display: none; }
+  body[data-poster-view='poster']:not(.demo-running) .fp-inset { display: none; }
 }
 
 /* link budget X-ray */
