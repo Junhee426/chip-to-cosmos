@@ -61,7 +61,8 @@ async function open(query, [viewport, extra] = DESKTOP, more = {}) {
   await page.waitForFunction(() => document.body.classList.contains('ready') && window.c2c, null, { timeout: 180000 });
   return { ctx, page };
 }
-const stage = (page, s, timeout = T) => page.waitForFunction((x) => document.body.dataset.demoStage === x, s, { timeout });
+// poll on a timer, not per animation frame: software-rendered frames can be slower than a stage's ready window
+const stage = (page, s, timeout = T) => page.waitForFunction((x) => document.body.dataset.demoStage === x, s, { timeout, polling: 100 });
 const idle = (page, timeout = T) => page.waitForFunction(() => !window.c2c.demo.running && !window.c2c.mgr.isBusy, null, { timeout });
 const running = (page) => page.waitForFunction(() => window.c2c.demo.running, null, { timeout: 30000 });
 /** software rendering is slow: wait until the resize was applied and the poster frame recomputed */
@@ -193,7 +194,7 @@ if (want('p1')) {
     check(`poster → ${btn}: poster card gone, presentation off, signal mode + labels`, !start.bottom && !start.pres && start.view === 'hidden' && start.mode === 'signal' && start.labels, brief(start));
     let secondary = null;
     if (mode === 'grating') {
-      await page.waitForFunction(() => document.body.dataset.demoReady === 'g-earth', null, { timeout: T });
+      await page.waitForFunction(() => document.body.dataset.demoReady === 'g-earth', null, { timeout: T, polling: 100 });
       secondary = await page.evaluate(() => ({ lobes: window.c2c.beam().secondary.length, drawn: window.c2c.mgr.current.fpSecondary.geometry.drawRange.count }));
       await page.screenshot({ path: `${out}/p1-grating-earth.png` });
     }
@@ -416,7 +417,7 @@ if (want('captures')) {
     await page.screenshot({ path: `${out}/cap-${name}-landing.png` });
     await page.locator('.pst-landing button', { hasText: 'Run' }).click();
     for (const s of ['q-phase', 'q-beam', 'q-footprint', 'q-poster']) {
-      await page.waitForFunction((x) => document.body.dataset.demoReady === x, s, { timeout: T });
+      await page.waitForFunction((x) => document.body.dataset.demoReady === x, s, { timeout: T, polling: 100 });
       await page.waitForTimeout(500);
       await page.screenshot({ path: `${out}/cap-${name}-${s}.png` });
     }
@@ -444,15 +445,21 @@ if (want('timing')) {
   for (const [name, vp] of [['desktop', DESKTOP], ['mobile', MOBILE]]) await guard(async () => {
     const { ctx, page } = await open('?quality=balanced', vp);
     await page.waitForTimeout(1500);
-    for (const run of ['cold', 'warm']) {
+    // 'first' = from the landing; 'replay' = from the finished poster. Whether levels had to be
+    // built is the app's own `cold` flag (neighbours may already be streamed in at idle).
+    for (const run of ['first', 'replay']) {
       const t0 = Date.now();
-      if (run === 'cold') await page.locator('.pst-landing button', { hasText: 'Run' }).click();
+      if (run === 'first') await page.locator('.pst-landing button', { hasText: 'Run' }).click();
       else await posterBtn(page, 'Replay').click();
       await running(page);
       await idle(page);
       const harness = (Date.now() - t0) / 1000;
-      const t = await page.evaluate(() => window.c2c.demo.timing);
-      const row = { viewport: name, run, ...Object.fromEntries(Object.entries(t).map(([k, v]) => [k, typeof v === 'number' ? +(v / 1000).toFixed(2) : v])), harnessSeconds: +harness.toFixed(2) };
+      // builds before the timing API only report the harness wall time (click → demo idle)
+      const t = await page.evaluate(() => window.c2c.demo.timing ?? null);
+      const sec = (ms) => +(ms / 1000).toFixed(2);
+      const row = t
+        ? { viewport: name, run, cold: t.cold, reason: t.reason, preparationS: sec(t.preparationMs), playbackS: sec(t.playbackMs), finishS: sec(t.finishMs), totalS: sec(t.totalMs), plannedPlaybackS: sec(t.plannedPlaybackMs), harnessS: +harness.toFixed(2) }
+        : { viewport: name, run, plannedS: await page.evaluate(() => window.c2c.demo.plannedSeconds), harnessS: +harness.toFixed(2) };
       results.timing.push(row);
       console.log('  timing', JSON.stringify(row));
       await page.waitForTimeout(1500);

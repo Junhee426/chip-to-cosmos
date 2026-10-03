@@ -46,9 +46,9 @@ export class FootprintInset {
     const ys = pts.map((q) => q[1]);
     const minX = Math.min(...xs, 0), maxX = Math.max(...xs, 0), minY = Math.min(...ys, 0), maxY = Math.max(...ys, 0);
     // one scale for both axes (px per km): the shape is never stretched
-    const s = Math.min((W - 2 * PAD) / Math.max(maxX - minX, 1e-6), (H - 2 * PAD - 12) / Math.max(maxY - minY, 1e-6));
+    const s = Math.min((W - 2 * PAD) / Math.max(maxX - minX, 1e-6), (H - 2 * PAD - 22) / Math.max(maxY - minY, 1e-6));
     const ox = W / 2 - ((minX + maxX) / 2) * s;
-    const oy = (H - 12) / 2 - ((minY + maxY) / 2) * s;
+    const oy = 10 + (H - 22) / 2 - ((minY + maxY) / 2) * s;
     const X = (x: number) => (ox + x * s).toFixed(1);
     const Y = (y: number) => (oy - y * s).toFixed(1);
     const poly = pts.map(([x, y]) => `${X(x)},${Y(y)}`).join(' ');
@@ -61,7 +61,7 @@ export class FootprintInset {
       <text class="fp-tlabel" x="${X(0)}" y="${(+Y(0) - 5).toFixed(1)}" text-anchor="middle">terminal</text>
       <line class="fp-bar" x1="${bx}" y1="${by}" x2="${(bx + bar * s).toFixed(1)}" y2="${by}"/>
       <text class="fp-blabel" x="${(bx + bar * s + 4).toFixed(1)}" y="${by + 3}">${bar} km</text>
-      <text class="fp-axis" x="${W - 4}" y="${by + 3}" text-anchor="end">along-track →</text>
+      <text class="fp-axis" x="${W - 4}" y="8" text-anchor="end">along-track →</text>
     </svg>`;
     this.caption.innerHTML = `<b>−3 dB</b> outline · ${Math.round(f.alongTrackKm)} × ${Math.round(f.crossTrackKm)} km`;
   }
