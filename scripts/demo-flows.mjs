@@ -64,6 +64,12 @@ async function open(query, [viewport, extra] = DESKTOP, more = {}) {
 const stage = (page, s, timeout = T) => page.waitForFunction((x) => document.body.dataset.demoStage === x, s, { timeout });
 const idle = (page, timeout = T) => page.waitForFunction(() => !window.c2c.demo.running && !window.c2c.mgr.isBusy, null, { timeout });
 const running = (page) => page.waitForFunction(() => window.c2c.demo.running, null, { timeout: 30000 });
+/** software rendering is slow: wait until the resize was applied and the poster frame recomputed */
+const reframed = (page) => page.waitForFunction(() => {
+  const c = window.c2c;
+  const v = c.mgr.current?.demoView('poster');
+  return Math.abs(c.rig.camera.aspect - innerWidth / innerHeight) < 1e-3 && !!v && c.rig.camera.position.distanceTo(v.pos) < 1e-6 && !c.rig.flying;
+}, null, { timeout: 120000 }).then(() => true, () => false);
 const posterBtn = (page, text) => page.locator('.pst-bottom button', { hasText: text });
 const setSlider = (page, v) => page.evaluate((x) => {
   const i = document.querySelector('.pst-try input');
@@ -198,8 +204,8 @@ if (want('p1')) {
     const end = await snap(page);
     await page.screenshot({ path: `${out}/p1-${mode}-complete.png` });
     const home = await page.evaluate(() => { const c = window.c2c; const h = c.mgr.current.home; return Math.max(c.rig.camera.position.distanceTo(h.pos), c.rig.controls.target.distanceTo(h.target)); });
-    // explorable: select through a real callout, then the inspector shows it
-    await page.locator('.callout:visible', { hasText: '−3 dB Footprint' }).first().click({ timeout: 20000 }).catch((e) => console.log('  callout click:', e.message.split('\n')[0]));
+    // explorable: select through a real callout (it moves with the running orbit, so no stability wait)
+    await page.locator('.callout:visible', { hasText: '−3 dB Footprint' }).first().click({ timeout: 20000, force: true }).catch((e) => console.log('  callout click:', e.message.split('\n')[0]));
     await page.waitForTimeout(500);
     const sel = await page.evaluate(() => ({ selected: window.c2c.store.get().selected, panel: !!document.querySelector('.panel') && getComputedStyle(document.querySelector('.panel')).display !== 'none' }));
     const kept = mode === 'grating' ? end.params.d > 0.5 : end.params.steer === 25;
@@ -287,7 +293,9 @@ if (want('races')) {
     await idle(page);
     await page.waitForTimeout(4500); // longer than the remaining reading holds
     const s = await snap(page);
-    check('Explore freely during the Link segment: stays in exploration (no late poster/pause), keeps the slider value', !s.pres && s.view === 'hidden' && s.orbit && !s.orbit.paused && s.params.steer === 45 && s.reason === 'explore' && s.rail, brief(s));
+    // reason is 'explore' when the click lands in the reading hold, 'complete' when a slow renderer lets the run
+    // finish first — either way the user's later Explore must decide the final screen
+    check('Explore freely during the Link segment: stays in exploration (no late poster/pause), keeps the slider value', !s.pres && s.view === 'hidden' && s.orbit && !s.orbit.paused && s.params.steer === 45 && (s.reason === 'explore' || s.reason === 'complete') && s.rail, brief(s));
     await ctx.close();
   });
   await guard(async () => {
@@ -308,24 +316,24 @@ if (want('resize')) await guard(async () => {
   await page.waitForTimeout(800);
   const ref = await snap(page);
   for (const steer of [0, 25, 50]) {
-    await page.setViewportSize({ width: 1440, height: 900 });
-    await page.waitForTimeout(900);
     await setSlider(page, steer);
     await page.waitForTimeout(600);
     const d0 = await snap(page);
     const f0 = await fitInfo(page);
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.waitForTimeout(1200);
+    const r390 = await reframed(page);
+    await page.waitForTimeout(300);
     const m = await snap(page);
     const fm = await fitInfo(page);
     if (steer === 50) await page.screenshot({ path: `${out}/resize-390-50.png` });
     await page.setViewportSize({ width: 1440, height: 900 });
-    await page.waitForTimeout(1200);
+    const r1440 = await reframed(page);
+    await page.waitForTimeout(300);
     const d1 = await snap(page);
     const f1 = await fitInfo(page);
     check(`resize 1440×900 → 390×844 → 1440×900 at θ0=${steer}°: hero + full contour inside the safe viewport at both sizes; params/orbit preserved; no drift`,
-      f0.all && f0.hero && fm.all && fm.hero && f1.all && f1.hero && sameParams(m, d0) && sameParams(d1, d0) && JSON.stringify(d1.orbit) === JSON.stringify(ref.orbit) && camDiff(d1, ref) < 1e-6,
-      `390: ${JSON.stringify(fm)} | 1440: all=${f1.all} hero=${f1.hero} camΔ(ref)=${camDiff(d1, ref).toExponential(1)}`);
+      r390 && r1440 && f0.all && f0.hero && fm.all && fm.hero && f1.all && f1.hero && sameParams(m, d0) && sameParams(d1, d0) && JSON.stringify(d1.orbit) === JSON.stringify(ref.orbit) && camDiff(d1, ref) < 1e-6,
+      `reframed=${r390}/${r1440} 390: ${JSON.stringify(fm)} | 1440: all=${f1.all} hero=${f1.hero} camΔ(ref)=${camDiff(d1, ref).toExponential(1)}`);
   }
   await ctx.close();
 });
