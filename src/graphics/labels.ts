@@ -129,8 +129,11 @@ export class LabelLayer {
     }
     if (!this.enabled || !active.length) return;
     // density: keep the selected callout, then navigable/essential ones, then the rest
-    const budget = Math.max(1, Math.min(this.maxLabels, Math.ceil(active.length * this.density)));
-    const ranked = [...active].sort((a, b) => rank(b) - rank(a));
+    // Presentation labels carry the explanation; Auto quality may thin decoration,
+    // but must not remove the footprint/terminal from that explanation.
+    const budget = Math.max(1, Math.min(this.maxLabels, Math.ceil(active.length * (this.only ? 1 : this.density))));
+    // An absent grating lobe must not consume the mobile terminal's label slot.
+    const ranked = active.filter((it) => isShown(it.object)).sort((a, b) => rank(b) - rank(a));
     const allowed = new Set(ranked.slice(0, budget));
     const left: LabelItem[] = [];
     const right: LabelItem[] = [];
@@ -156,9 +159,9 @@ export class LabelLayer {
   }
 
   private layoutColumn(col: LabelItem[], x: number, side: 'left' | 'right', h: number): void {
-    const spacing = 40;
-    const top = this.insets.top;
-    const bottom = h - this.insets.bottom;
+    const spacing = this.only ? 54 : 40;
+    const top = this.insets.top + (this.only ? 18 : 0);
+    const bottom = h - this.insets.bottom - (this.only ? 22 : 0);
     // a column that cannot fit drops its least important callouts instead of overlapping them
     const capacity = Math.max(1, Math.floor((bottom - top) / spacing) + 1);
     if (col.length > capacity) {

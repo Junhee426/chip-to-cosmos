@@ -458,6 +458,10 @@ export class SatelliteLevel extends BaseLevel {
       case 'array-focus':
         return { pos: this.arrayTile.clone().add(v3(-0.2, -0.32, 0.26)), target: this.arrayTile.clone() };
       case 'opening':
+        if (((this.ctx.camera as THREE.PerspectiveCamera | undefined)?.aspect ?? 1.6) < 0.8) {
+          return { pos: v3(-20, -1.5, 46), target: v3(0.3, -11, 0) };
+        }
+        return { pos: v3(-9, -3.2, 21), target: v3(0.3, -6, 0) };
       case 'earth-facing':
         // just below the nadir deck, looking slightly down: the aperture faces the Earth limb below
         return { pos: v3(-9, -3.2, 21), target: v3(0.3, -6, 0) };

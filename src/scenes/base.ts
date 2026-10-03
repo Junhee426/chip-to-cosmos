@@ -95,7 +95,7 @@ export abstract class BaseLevel {
   protected tick(_dt: number, _state: AppState): void {}
 
   /** Optional camera framing for a hero-demo stage (this level's units); null = keep the current view. */
-  demoView(_stage: string): { pos: THREE.Vector3; target: THREE.Vector3 } | null {
+  demoView(_stage: string): View | null {
     return null;
   }
 

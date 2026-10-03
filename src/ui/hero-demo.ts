@@ -44,6 +44,8 @@ export class HeroDemo {
   private sub: HTMLElement;
   private cancelled = false;
   private snapshot: DemoSnapshot | null = null;
+  private previousPosterView: Poster['view'] = 'hidden';
+  private releaseLevels: (() => void) | null = null;
   running = false;
   mode: DemoMode | null = null;
   stage: DemoStage | null = null;
@@ -51,6 +53,7 @@ export class HeroDemo {
   plannedSeconds = 0;
   /** wall-clock duration of the last completed run, seconds */
   lastWallSeconds = 0;
+  preparationSeconds = 0;
 
   constructor(private mgr: ScaleManager, private rig: CameraRig, private store: Store, private hud: Hud, private poster: Poster, private motion: number, private onFinish: (mode: DemoMode) => void) {
     this.el = h('div', 'hero-demo');
@@ -150,6 +153,8 @@ export class HeroDemo {
     this.mode = mode;
     this.plannedSeconds = 0;
     this.snapshot = snapshotDemoState(this.store.get());
+    this.previousPosterView = this.poster.view;
+    this.releaseLevels = this.mgr.retainLevels(['satellite', 'array', 'cosmos']);
     this.el.classList.add('on');
     document.body.classList.add('demo-running');
     document.body.dataset.demoMode = mode;
@@ -167,10 +172,12 @@ export class HeroDemo {
   // ------------------------------------------------------------------ quick (~15 s)
   private async quick(): Promise<boolean> {
     const s = this.store;
-    s.set({ presentation: true, mode: 'signal', explode: 0, selected: null, emphasis: null });
+    s.set({ presentation: true, mode: 'signal', labels: true, explode: 0, selected: null, emphasis: null });
     this.poster.setView('demo');
-    // the scenes this demo needs are built and their shaders compiled before the clock starts
+    this.say('GETTING READY', 'Preparing the live beam demo', 'The panel stays fixed; element phase steers the beam.');
+    const prepStart = performance.now();
     await this.mgr.preload(['satellite', 'array', 'cosmos']);
+    this.preparationSeconds = (performance.now() - prepStart) / 1000;
     this.enter('q-satellite');
     if (!(await this.toSatellite())) return false;
     s.setParams({ ...POSTER_STATE, steerDeg: 0 });
@@ -191,12 +198,14 @@ export class HeroDemo {
         this.sub.textContent = `θ₀ = ${steer}° · β = ${((b.pattern.phaseStepX * 180) / Math.PI).toFixed(0)}° per element`;
       }),
     ]);
+    // These motions overlap: use their critical path, not the sum.
+    if (this.motion >= 1) this.plannedSeconds -= 1.3 * this.motion;
     await this.hold(300);
 
     if (this.cancelled) return false;
     this.enter('q-beam');
     const b = beamSolution(s.get().params);
-    this.say('BEAM', `GAIN ${b.pattern.gainDbi.toFixed(1)} dBi&nbsp;&nbsp;·&nbsp;&nbsp;HPBW ${b.pattern.hpbwDeg.toFixed(1)}°`, 'Calculated radiation pattern of the same array state');
+    this.say('BEAM', 'Phase changes steer the beam; the panel stays fixed', `Gain ${b.pattern.gainDbi.toFixed(1)} dBi · width ${b.pattern.hpbwDeg.toFixed(1)}° · array-local close-up`);
     if (!(await this.go('array', 1.5))) return false;
     await this.frame('pattern', 0.6);
     await this.hold(700);
@@ -207,14 +216,18 @@ export class HeroDemo {
     this.say('FOOTPRINT', 'The −3 dB contour lands on the spherical Earth', f.center ? `${km(f.alongTrackKm)} × ${km(f.crossTrackKm)} km · ${km(f.nadirOffsetKm ?? 0)} km from nadir` : 'Beam centre above the horizon');
     if (!(await this.go('cosmos', 1.0))) return false;
     this.pauseOrbit(true);
+    (this.mgr.current as unknown as { resetOrbit: () => void }).resetOrbit();
     await this.frame('poster', 1.0);
     await this.hold(300);
 
     if (this.cancelled) return false;
     this.enter('q-poster');
-    this.el.classList.remove('show');
+    const link = beamSolution(s.get().params).link;
+    this.say('LINK', link && link.marginDb >= 0 ? 'The ground terminal has a positive link margin' : 'The link needs more margin', link ? `${link.marginDb.toFixed(1)} dB above the model’s required signal quality · try steering below` : 'The beam does not reach the Earth');
     this.poster.setView('poster');
-    await this.hold(3600);
+    await this.hold(3000);
+    this.el.classList.remove('on', 'show');
+    await this.hold(600);
     return true;
   }
 
@@ -356,8 +369,10 @@ export class HeroDemo {
       const r = restorePatch(this.snapshot);
       this.store.set(r.state);
       this.store.setParams(r.params);
-      this.poster.setView(r.state.presentation ? 'poster' : 'hidden');
+      this.poster.setView(this.previousPosterView);
     }
+    this.releaseLevels?.();
+    this.releaseLevels = null;
     this.snapshot = null;
     if (completed) this.onFinish(mode);
   }

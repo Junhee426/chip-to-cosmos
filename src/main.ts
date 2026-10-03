@@ -154,7 +154,10 @@ async function boot(): Promise<void> {
     store.setParams({ ...POSTER_STATE, steerDeg: 0 });
     poster.setView('landing');
     const v = mgr.current?.demoView('opening');
-    if (v) rig.setView(v);
+    if (v) {
+      rig.controls.maxDistance = Math.max(rig.controls.maxDistance, v.pos.distanceTo(v.target) * 1.1);
+      rig.setView(v);
+    }
   };
 
   // ---- performance: adaptive quality + overlay (decoration first; content never removed) ----
@@ -299,7 +302,9 @@ async function boot(): Promise<void> {
   new RenderLoop(({ dt, raw, elapsed }) => {
     perfCtl.beginFrame();
     viewport.tick(dt);
-    rig.update(dt);
+    // Scripted camera flights share the wall clock used by demo holds/steering.
+    // Physical/decorative simulation below still uses the clamped step.
+    rig.update(demo.running ? raw : dt);
     mgr.update(dt);
     stars.position.copy(rig.camera.position);
     stars.scale.setScalar((rig.camera.far * 0.45) / 2000);

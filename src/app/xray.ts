@@ -13,4 +13,4 @@ export const XRAY_TARGETS: Partial<Record<LevelId, Record<XrayKey, string>>> = {
 };
 
 /** Callouts allowed in presentation mode (the poster stays uncluttered). */
-export const PRESENTATION_LABELS = new Set(['hero', 'footprint', 'user', 'grating-area', 'phased-array', 'user-beam', 'terminal', 'service-area', 'beam', 'panel']);
+export const PRESENTATION_LABELS = new Set(['hero', 'hero-array', 'footprint', 'user', 'grating-area', 'phased-array', 'user-beam', 'terminal', 'service-area', 'beam', 'panel']);

@@ -569,7 +569,8 @@ export class Hud {
     if (this.store.get().presentation) {
       // presentation: no rail, panel or coupling — only title/causal/caption on top and the poster bar
       const r = (e: HTMLElement | null) => (e && !e.hidden ? e.getBoundingClientRect() : null);
-      const title = r(this.posterTop?.querySelector<HTMLElement>('.pst-thesis') ?? null);
+      // The landing copy and actions occupy real space too, especially on phones.
+      const title = r(this.posterTop);
       const pb = r(this.posterBottom);
       const topEdge = Math.max(causal && causal.height ? causal.bottom : 0, demo && demo.height ? demo.bottom : 0, title && title.height ? title.bottom : 0);
       return { top: topEdge + 8, right: 16, bottom: pb && pb.height ? H - pb.top + 8 : 16, left: 16 };
