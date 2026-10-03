@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import './styles/main.css';
 import { LEVELS, type LevelId } from './app/navigation';
 import { ScaleManager } from './app/scale-manager';
-import { beamSolution } from './app/system';
+import { beamSolution, calcStats } from './app/system';
 import { createStore, type Quality } from './app/state';
 import { GRAPHICS_PRESETS, detectInitialQuality, getRenderDpr, policyFor, readDeviceSignals, tierCeiling, type GraphicsConfig } from './app/quality';
 import { CameraRig } from './graphics/camera';
@@ -14,7 +14,10 @@ import { createStars } from './graphics/earth';
 import type { LevelContext } from './scenes/base';
 import { Hud } from './ui/hud';
 import { Intro } from './ui/intro';
-import { HeroDemo } from './ui/hero-demo';
+import { HeroDemo, type DemoMode } from './ui/hero-demo';
+import { Poster } from './ui/poster';
+import { POSTER_STATE } from './app/beam-presets';
+import { PRESENTATION_LABELS, XRAY_TARGETS, type XrayKey } from './app/xray';
 import { checkWebGL2, createRenderer, prewarmLevel, reducedMotionScale, showUnsupported } from './runtime/renderer';
 import { RenderLoop } from './runtime/render-loop';
 import { InputController, bindKeyboard } from './runtime/input-controller';
@@ -78,8 +81,20 @@ async function boot(): Promise<void> {
   const back = () => {
     const s = store.get();
     const p = LEVELS[s.level].parent;
-    if (s.selected) store.set({ selected: null });
+    if (s.presentation) explore();
+    else if (s.selected) store.set({ selected: null });
     else if (p) navigate(p);
+  };
+  /** leave presentation mode: chrome returns, the scene and parameters stay as they are */
+  const explore = () => {
+    store.set({ presentation: false });
+    poster.setView('hidden');
+    for (const l of mgr.levelsBuilt()) if (l.id === 'cosmos') (l as unknown as { orbitPaused: boolean }).orbitPaused = false;
+  };
+  const runDemo = (mode: DemoMode) => {
+    if (intro.running) return;
+    if (demo.running) void demo.skip().then(() => demo.play(mode));
+    else void demo.play(mode);
   };
   const component = (id: string | null) => (id ? mgr.current?.components.find((c) => c.id === id) ?? null : null);
 
@@ -97,9 +112,7 @@ async function boot(): Promise<void> {
     replayIntro: () => void intro.play(),
     componentInfo: (id) => component(id),
     components: () => mgr.current?.components.filter((c) => c.label !== false) ?? [],
-    runBeamDemo: () => {
-      if (!intro.running) void demo.play();
-    },
+    runBeamDemo: () => runDemo('quick'),
   });
   viewport.attach(hud);
   const intro = new Intro(app, mgr, rig, store, () => {
@@ -110,9 +123,39 @@ async function boot(): Promise<void> {
     }
   });
 
-  const demo = new HeroDemo(mgr, rig, store, hud, motion, () =>
-    hud.toast('Now try it: STEER, ARRAY SIZE, SPACING, TAPER — or the Grating lobe experiment.', { label: 'Open Beam Lab', run: () => navigate('array') }),
-  );
+  const poster = new Poster(store, { runQuick: () => runDemo('quick'), runEngineering: () => runDemo('engineering'), runGrating: () => runDemo('grating'), explore });
+  hud.mountPoster(poster.top, poster.bottom);
+  poster.setView('hidden');
+  const demo = new HeroDemo(mgr, rig, store, hud, poster, motion, (mode) => {
+    // quick demo ends on the interactive poster (Try it); the others hand over to free exploration
+    if (mode === 'engineering') hud.toast('Now try it: STEER, ARRAY SIZE, SPACING, TAPER — or the Grating lobe experiment.', { label: 'Open Beam Lab', run: () => navigate('array') });
+    if (mode === 'grating') hud.toast('Try it: move SPACING in BEAM LAB across the limit and back.', { label: 'Open Beam Lab', run: () => navigate('array') });
+  });
+  /** `?view=poster`: the reproducible signature frame (fixed state, fixed orbit position). */
+  const showPoster = async () => {
+    await mgr.jumpTo('cosmos');
+    store.set({ mode: 'signal', presentation: true, selected: null, emphasis: null });
+    store.setParams(POSTER_STATE);
+    const cosmos = mgr.current as unknown as { resetOrbit: () => void; orbitPaused: boolean; demoView: (s: string) => { pos: THREE.Vector3; target: THREE.Vector3 } | null };
+    cosmos.resetOrbit();
+    cosmos.orbitPaused = true;
+    poster.setView('poster');
+    viewport.layout();
+    await new Promise((r) => requestAnimationFrame(r));
+    const v = cosmos.demoView('poster');
+    if (v) {
+      rig.controls.minDistance = 0;
+      rig.setView(v);
+    }
+  };
+  /** first screen: the real satellite scene behind a title and one call to action */
+  const showLanding = () => {
+    store.set({ mode: 'signal', presentation: true });
+    store.setParams({ ...POSTER_STATE, steerDeg: 0 });
+    poster.setView('landing');
+    const v = mgr.current?.demoView('opening');
+    if (v) rig.setView(v);
+  };
 
   // ---- performance: adaptive quality + overlay (decoration first; content never removed) ----
   perf = new PerformanceController(
@@ -132,7 +175,9 @@ async function boot(): Promise<void> {
         for (const l of mgr.levelsBuilt()) l.applyGraphics(g);
       },
       report: (mode, tier, step) => hud.setQualityState(mode, tier, step),
-      suggestAuto: () => hud.toast('Rendering is slow at this quality.', { label: 'Use Auto', run: () => store.set({ quality: 'auto' }) }),
+      suggestAuto: () => {
+        if (!store.get().presentation) hud.toast('Rendering is slow at this quality.', { label: 'Use Auto', run: () => store.set({ quality: 'auto' }) });
+      },
     },
     store.get().quality,
     detected,
@@ -184,7 +229,16 @@ async function boot(): Promise<void> {
       const comp = component(s.selected);
       if (comp && !mgr.isBusy) viewport.keepInView(comp.object, motion);
     }
-    if (c.has('params') || c.has('mode')) for (const l of mgr.levelsBuilt()) l.onState(s, c);
+    if (c.has('params') || c.has('mode') || c.has('presentation')) for (const l of mgr.levelsBuilt()) l.onState(s, c);
+    if (c.has('presentation')) {
+      labels.setOnly(s.presentation ? PRESENTATION_LABELS : null);
+      if (!s.presentation && poster.view !== 'hidden') poster.setView('hidden');
+    }
+    if (c.has('level') && s.emphasis) queueMicrotask(() => store.set({ emphasis: null }));
+    if (c.has('emphasis') || c.has('level')) {
+      const id = s.emphasis ? XRAY_TARGETS[s.level]?.[s.emphasis as XrayKey] ?? null : null;
+      mgr.current?.emphasize(id);
+    }
   });
 
   // ---- input ----
@@ -233,9 +287,13 @@ async function boot(): Promise<void> {
   document.body.classList.add('ready');
   const splash = document.querySelector('.splash');
   setTimeout(() => splash?.remove(), 1000); // do not keep a transparent full-screen layer around
-  // reduced motion: never autoplay the cinematic intro (it stays available from the HUD)
-  if (!seen && !startLevel && !params.has('nointro') && !params.has('demo') && motion === 1) void intro.play();
-  if (params.has('demo')) void demo.play();
+  // first screen: the landing over the live satellite scene (the long intro stays on ▶ Intro)
+  const view = params.get('view');
+  const demoParam = params.get('demo');
+  if (view === 'poster') await showPoster();
+  else if (params.has('demo')) void demo.play(demoParam === 'engineering' || demoParam === 'grating' ? demoParam : 'quick');
+  else if (!startLevel && !params.has('nointro')) showLanding();
+  void seen;
 
   // ---- frame ----
   new RenderLoop(({ dt, raw, elapsed }) => {
@@ -256,8 +314,9 @@ async function boot(): Promise<void> {
   }).start();
 
   (window as unknown as { c2c: unknown }).c2c = {
-    store, mgr, rig, scene, renderer, hud, post, viewport, demo,
+    store, mgr, rig, scene, renderer, hud, post, viewport, demo, poster, explore,
     beam: () => beamSolution(store.get().params),
+    calc: calcStats,
     quality: perfCtl.quality,
     stats: perfCtl.stats,
     frameInfo: () => ({ ...perfCtl.frameInfo }),

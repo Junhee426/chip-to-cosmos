@@ -10,7 +10,8 @@ import { junctionTemperatures } from '../models/power';
 import { DEFAULT_RX_CHAIN, friisCascade, noiseFloorDbm, type RfStage } from '../models/rf';
 import { bandGapEv, builtInPotential, diodeCurrent, intrinsicCarrierDensity, junctionProfile } from '../models/semiconductor';
 import { formatSI, wavelengthM } from '../models/units';
-import { beamChanged, beamHero, km, km2, powerControls } from './beam-controls';
+import { arrayCompare, beamChanged, beamHero, km, km2, powerControls } from './beam-controls';
+import { linkXray } from './link-xray';
 import { fx, h, readout, section, segmented, slider } from './dom';
 
 export interface Analysis {
@@ -190,6 +191,9 @@ const arrayPanel: Builder = (store) => {
   const hero = section('Beam experiment', 'calculated');
   const beam = beamHero(store);
   hero.body.append(beam.el);
+  const cmpSec = section('Array compare · 8×8 vs 32×32', 'calculated');
+  const cmp = arrayCompare(store);
+  cmpSec.body.append(cmp.el);
   const sec = section('Engineering detail', 'calculated');
   const set = (k: keyof Params) => (v: number) => store.setParams({ [k]: v } as Partial<Params>);
   const n = slider({ label: 'Elements per side N', min: 4, max: 32, step: 1, value: p0.arrayN, format: (v) => `${v} × ${v}`, onInput: set('arrayN') });
@@ -215,10 +219,11 @@ const arrayPanel: Builder = (store) => {
   const cut = new LineChart({ xLabel: 'θ (deg)', yLabel: 'Normalised gain (dB)', height: 160, xDomain: [-90, 90], yDomain: [-50, 2] });
   const fpNote = h('p', 'note', 'BEAM LAB draws the −3 dB contour on a flat ground plane (directions exact, distance compressed). COSMOS intersects the same contour with the spherical Earth; the numbers above marked "spherical" are that intersection.');
   sec.body.append(n.el, az.el, w.el, power.el, ro.el, fpNote, eq, h('div', 'chart-title', 'Polar cut through the steered beam'), polar.el, cut.el);
-  root.append(hero.el, sec.el);
+  root.append(hero.el, cmpSec.el, sec.el);
   const update = (s: AppState, changed: Set<string>) => {
     const q = s.params;
     beam.update(s, changed);
+    cmp.update(s, changed);
     n.set(q.arrayN); az.set(q.steerAzDeg); w.set(q.weighting);
     power.update(s);
     if (!beamChanged(changed)) return;
@@ -265,11 +270,15 @@ const cosmosPanel: Builder = (store) => {
   const chart = new LineChart({ xLabel: 'Elevation (deg)', yLabel: 'Link margin (dB)', height: 170, xDomain: [10, 90] });
   const chartNote = h('p', 'note', 'Curve: margin vs elevation with the current EIRP held fixed (geometry only). Marker: the calculated beam-centre link.');
   sec.body.append(alt.el, st.el, fr.el, power.el, gr.el, geo, ro.el, eq, chart.el, chartNote);
-  root.append(sec.el);
+  const xsec = section('Link budget X-ray', 'calculated');
+  const xray = linkXray(store);
+  xsec.body.append(xray.el);
+  root.append(xsec.el, sec.el);
   const update = (s: AppState) => {
     const q = s.params;
     alt.set(q.altitudeKm); st.set(q.steerDeg); fr.set(q.freqGHz); gr.set(q.rxGainDbi);
     power.update(s);
+    xray.update(s);
     const sys = solveSystem(q);
     const b = sys.beam;
     const L = sys.link;
@@ -328,10 +337,16 @@ const satellitePanel: Builder = (store) => {
   const eq = eqLine('');
   const chart = new LineChart({ xLabel: 'ADC resolution (bit)', yLabel: 'Payload DC power (W)', height: 160, xDomain: [4, 12] });
   sec.body.append(bitsS.el, fsS.el, nS.el, pS.el, bars, ro.el, eq, chart.el);
-  root.append(sec.el);
+  const xsec = section('Link budget X-ray', 'calculated');
+  const xray = linkXray(store);
+  xsec.body.append(xray.el);
+  root.append(sec.el, xsec.el);
+  let ptsKey = '';
+  let pts: [number, number][] = [];
   const update = (s: AppState) => {
     const q = s.params;
     bitsS.set(q.adcBits); fsS.set(q.adcFsMsps); nS.set(q.arrayN); pS.update(s);
+    xray.update(s);
     const sys = solveSystem(q);
     const items = [
       ['PA (DC)', sys.paDcW, 'var(--series-2)'],
@@ -343,7 +358,13 @@ const satellitePanel: Builder = (store) => {
     bars.innerHTML = items.map(([n, v, c]) => `<div class="pbar"><span>${n}</span><div class="pbar-track"><i style="width:${(100 * v) / max}%;background:${c}"></i></div><b>${v.toFixed(0)} W</b></div>`).join('') + `<div class="pbar pbar-total"><span>Solar</span><div class="pbar-track"><i style="width:${(100 * sys.solarW) / max}%;background:var(--series-4)"></i></div><b>${sys.solarW.toFixed(0)} W</b></div>`;
     ro.set({ solar: fx(sys.solarW, 0), load: fx(sys.totalLoadW, 0), margin: `${sys.powerMarginW >= 0 ? '+' : ''}${fx(sys.powerMarginW, 0)}`, heat: fx(sys.heatW, 0), rad: fx(sys.radiatorM2, 2) });
     eq.innerHTML = `A_rad = Q / (εσ(T⁴ − T_sink⁴)) = ${fx(sys.heatW, 0)} W / (0.85·5.67×10⁻⁸·(300⁴ − 200⁴)) = <b>${fx(sys.radiatorM2, 2)} m²</b>`;
-    const pts: [number, number][] = [4, 6, 8, 10, 12].map((b) => [b, solveSystem({ ...q, adcBits: b }).payloadDcW]);
+    // payload DC does not depend on steering, taper, spacing or link geometry: recompute the
+    // five-point curve only when one of its inputs changes (not on every beam-steering frame)
+    const key = [q.adcFsMsps, q.arrayN, q.paOutW, q.powerMode, q.totalRfW, q.altitudeKm, q.modulation].join('|');
+    if (key !== ptsKey) {
+      ptsKey = key;
+      pts = [4, 6, 8, 10, 12].map((b) => [b, solveSystem({ ...q, adcBits: b }).payloadDcW]);
+    }
     chart.update([{ id: 'p', name: 'Payload DC', color: C1, points: pts }], [{ x: q.adcBits, y: sys.payloadDcW, label: `${sys.payloadDcW.toFixed(0)} W` }]);
   };
   return { el: root, update };

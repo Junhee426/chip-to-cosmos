@@ -31,11 +31,22 @@ export function slider(o: SliderOpts): { el: HTMLElement; set: (v: number) => vo
   input.value = String(o.value);
   const show = (v: number) => (val.textContent = `${o.format ? o.format(v) : v}${o.unit ? ` ${o.unit}` : ''}`);
   show(o.value);
+  // A drag fires many input events per frame: the label follows every event, the model
+  // receives at most one value per animation frame, and the release commits the exact value.
+  let pending: number | null = null;
+  const flush = () => {
+    if (pending === null) return;
+    const v = pending;
+    pending = null;
+    o.onInput(v);
+  };
   input.addEventListener('input', () => {
     const v = Number(input.value);
     show(v);
-    o.onInput(v);
+    if (pending === null) requestAnimationFrame(flush);
+    pending = v;
   });
+  input.addEventListener('change', flush);
   wrap.append(head, input);
   return {
     el: wrap,

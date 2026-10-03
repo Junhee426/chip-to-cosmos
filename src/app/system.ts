@@ -31,11 +31,20 @@ const cache = new WeakMap<Params, SystemResult>();
 export function solveSystem(p: Params): SystemResult {
   let r = cache.get(p);
   if (!r) {
+    const t = performance.now();
     r = evaluateSystem(systemInput(p));
+    const ms = performance.now() - t;
+    calcStats.solves++;
+    calcStats.lastMs = ms;
+    calcStats.totalMs += ms;
+    calcStats.maxMs = Math.max(calcStats.maxMs, ms);
     cache.set(p, r);
   }
   return r;
 }
+
+/** Main-thread cost of the system/beam evaluation (CPU time; exposed for the perf harness). */
+export const calcStats = { solves: 0, lastMs: 0, totalMs: 0, maxMs: 0 };
 
 export function beamSolution(p: Params): BeamSolution {
   return solveSystem(p).beam;

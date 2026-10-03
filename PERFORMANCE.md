@@ -210,3 +210,22 @@ further reduced by the tier's density; mono sub-lines are hidden.
 - **Quality-aware density.** Wavefront count scales with the tier's particle factor (never below 3);
   the calculated footprint, contour and rays are never reduced.
 - **Measured** in `docs/performance-results.md` (V3 section) with `scripts/hero.mjs`.
+
+## V4 additions (signature experience)
+
+- **Profiled before optimising** (`npm run profile:beam`): `arrayMetrics` (the 90 × 120 directivity
+  integration) was ~85–90 % of `solveBeam`, and the BEAM LAB surface sampling cost about the same —
+  both dominated by one `cos` + `sin` per element per direction.
+- **Same math, fewer transcendental calls.** The separable array-factor sum advances the phasor
+  e^{jiψ} by complex multiplication (tested equal to the direct sum to 1e-12).
+- **Dependency-aware caches** (`models/beam-solution.ts`, small LRU, no library): the pattern depends
+  on N, d/λ, θ₀, φ₀, taper and element pattern — not on frequency, altitude, power or receiver; the
+  footprints add altitude; the link (cheap) is always recomputed. An altitude, frequency, power or
+  receiver change never re-integrates the pattern.
+- **Once per frame.** Sliders send at most one value per animation frame (exact value on release);
+  SATELLITE and COSMOS apply parameter changes in `tick` (BEAM LAB already did); the HUD coalesces.
+- **First-visit hitch.** The Quick Demo preloads exactly the scenes it uses (satellite, array, cosmos —
+  `ScaleManager.preload`), and shader pre-warm now also compiles objects that start hidden (beam,
+  footprints, grating-lobe overlays), so their first appearance does not compile a program mid-demo.
+- **No Web Worker**: measurements do not show a main-thread bottleneck that would justify one.
+- Measured numbers: `docs/performance-results.md` (V4 section).

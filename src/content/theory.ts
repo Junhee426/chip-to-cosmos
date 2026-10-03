@@ -41,6 +41,7 @@ export const THEORY: Record<LevelId, LevelTheory> = {
       'Power chain: Solar Array → PCDU (MPPT, regulation) → Battery / Loads. Orbit-average power must cover payload + bus with margin.',
       'Thermal chain: every watt not radiated as RF becomes heat (Q = P_DC − P_RF) conducted to a radiator sized by A = Q / (εσ(T⁴ − T_sink⁴)).',
       'Switch to POWER, THERMAL, SIGNAL and RADIATION modes to see each subsystem path in the same model.',
+      'The user-service arrays are fixed to the nadir (Earth-facing) deck: at zero steering their boresight points at the Earth centre. Steering changes the element phases — the panel never moves; the beam, its footprint and the link do.',
     ],
     models: [POWER_META],
     illustrative: ['Component layout is generic and plausible, not a specific spacecraft', 'Flow particle speeds are illustrative'],

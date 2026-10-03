@@ -18,6 +18,7 @@ import {
 } from './array-factor';
 import type { Vec3 } from './frames';
 import { linkBudget, type LinkResult } from './link-budget';
+import { Lru } from './lru';
 import { wattsToDbw } from './units';
 
 /**
@@ -110,32 +111,107 @@ export function rfPower(mode: ArrayPowerMode, elements: number, paOutW: number, 
   return mode === 'per-element-fixed' ? { rfW: paOutW * elements, perElementW: paOutW } : { rfW: totalRfW, perElementW: totalRfW / elements };
 }
 
+/** Everything that depends only on the array state (N, d/λ, θ0, φ0, taper, element pattern). */
+export interface PatternSolution {
+  key: string;
+  axis: Vec3;
+  steerAxis: Vec3;
+  peakField: number;
+  directivityDbi: number;
+  hpbwDeg: number;
+  sidelobeDb: number;
+  gratingLobe: boolean;
+  gratingLimit: number;
+  taperEfficiency: number;
+  cut: { thetaDeg: number; db: number }[];
+  phaseStepX: number;
+  phaseStepY: number;
+  /** −3 dB contour directions (ARRAY LOCAL) */
+  contour: Vec3[];
+  lobes: Lobe[];
+  /** −3 dB contours of the grating lobes ≥ SECONDARY_MIN_DB (ARRAY LOCAL) */
+  lobeContours: { lobe: Lobe; directions: Vec3[] }[];
+}
+
+/** Pattern projected for one orbit altitude. */
+export interface FootprintSolution {
+  flat: Footprint;
+  footprint: SphericalFootprint;
+  secondary: SecondaryFootprint[];
+}
+
+/**
+ * Dependency-aware caches. The array factor does not depend on frequency (spacing is
+ * in wavelengths) nor on altitude, power or receiver; the footprints do not depend on
+ * power or receiver. So an altitude change re-projects without re-integrating the
+ * pattern, and a receiver-gain or power change only re-runs the (cheap) link budget.
+ */
+const patternCache = new Lru<string, PatternSolution>(32);
+const footprintCache = new Lru<string, FootprintSolution>(32);
+
+export const beamCaches = { pattern: patternCache, footprint: footprintCache };
+
+export function patternKey(a: ArrayParams): string {
+  return [a.n, a.spacingLambda, a.steerThetaDeg, a.steerPhiDeg, a.weighting, a.elementQ ?? 1.3].join('|');
+}
+
+export function solvePattern(a: ArrayParams): PatternSolution {
+  const key = patternKey(a);
+  return patternCache.get(key, () => {
+    const w = weights(a.n, a.weighting);
+    const f = (d: Vec3) => fieldAt(a, w, d);
+    const m = arrayMetrics(a);
+    const hpRad = (m.hpbwDeg * Math.PI) / 180;
+    const nominal = steerAxis(a);
+    const axis = refinePeak(f, nominal, hpRad / 2);
+    const peakField = f(axis);
+    const step = contourStep(m.hpbwDeg);
+    const contour = traceContour(f, axis, peakField / Math.SQRT2, 72, step);
+    const lobes = gratingLobes(a, w, peakField, hpRad / 2);
+    const lobeContours = lobes.filter((l) => l.levelDb >= SECONDARY_MIN_DB).map((lobe) => ({ lobe, directions: traceContour(f, lobe.axis, f(lobe.axis) / Math.SQRT2, 48, step) }));
+    const t0 = (a.steerThetaDeg * Math.PI) / 180;
+    const p0 = (a.steerPhiDeg * Math.PI) / 180;
+    const kd = 2 * Math.PI * a.spacingLambda;
+    return {
+      key,
+      axis,
+      steerAxis: nominal,
+      peakField,
+      directivityDbi: m.directivityDbi,
+      hpbwDeg: m.hpbwDeg,
+      sidelobeDb: m.sidelobeDb,
+      gratingLobe: m.gratingLobe,
+      gratingLimit: gratingLimit(a.steerThetaDeg),
+      taperEfficiency: m.taperEfficiency,
+      cut: m.cut,
+      phaseStepX: -kd * Math.sin(t0) * Math.cos(p0),
+      phaseStepY: -kd * Math.sin(t0) * Math.sin(p0),
+      contour,
+      lobes,
+      lobeContours,
+    };
+  });
+}
+
+export function solveFootprint(p: PatternSolution, steerPhiDeg: number, altitudeKm: number): FootprintSolution {
+  return footprintCache.get(`${p.key}|${altitudeKm}`, () => {
+    const secondary: SecondaryFootprint[] = [];
+    for (const { lobe, directions } of p.lobeContours) {
+      const earth = sphericalFootprint(directions, lobe.axis, altitudeKm);
+      if (earth.center) secondary.push({ lobe, directions, earth });
+    }
+    return { flat: flatFootprint(p.contour, p.axis, steerPhiDeg, altitudeKm), footprint: sphericalFootprint(p.contour, p.axis, altitudeKm), secondary };
+  });
+}
+
+/** Orchestration: pattern (cached) → footprint (cached) → power and link (always, cheap). */
 export function solveBeam(i: BeamInput): BeamSolution {
   const a = i.array;
-  const w = weights(a.n, a.weighting);
-  const f = (d: Vec3) => fieldAt(a, w, d);
-  const m = arrayMetrics(a);
-  const hpRad = (m.hpbwDeg * Math.PI) / 180;
-  const nominal = steerAxis(a);
-  const axis = refinePeak(f, nominal, hpRad / 2);
-  const peakField = f(axis);
-  const step = contourStep(m.hpbwDeg);
-  const contour = traceContour(f, axis, peakField / Math.SQRT2, 72, step);
-  const flat = flatFootprint(contour, axis, a.steerPhiDeg, i.altitudeKm);
-  const footprint = sphericalFootprint(contour, axis, i.altitudeKm);
-  const lobes = gratingLobes(a, w, peakField, hpRad / 2);
-  const secondary: SecondaryFootprint[] = [];
-  for (const lobe of lobes) {
-    if (lobe.levelDb < SECONDARY_MIN_DB) continue;
-    const lp = f(lobe.axis);
-    const dirs = traceContour(f, lobe.axis, lp / Math.SQRT2, 48, step);
-    const earth = sphericalFootprint(dirs, lobe.axis, i.altitudeKm);
-    if (earth.center) secondary.push({ lobe, directions: dirs, earth });
-  }
-
+  const P = solvePattern(a);
+  const { flat, footprint, secondary } = solveFootprint(P, a.steerPhiDeg, i.altitudeKm);
   const elements = a.n * a.n;
   const { rfW, perElementW } = rfPower(i.powerMode, elements, i.paOutW, i.totalRfW);
-  const gainDbi = m.directivityDbi + 10 * Math.log10(i.radiationEff);
+  const gainDbi = P.directivityDbi + 10 * Math.log10(i.radiationEff);
   const eirpDbw = wattsToDbw(rfW) + gainDbi;
   const el = footprint.centerElevationDeg;
   const link =
@@ -156,29 +232,26 @@ export function solveBeam(i: BeamInput): BeamSolution {
           }),
           elevationDeg: el,
         };
-  const t0 = (a.steerThetaDeg * Math.PI) / 180;
-  const p0 = (a.steerPhiDeg * Math.PI) / 180;
-  const kd = 2 * Math.PI * a.spacingLambda;
   return {
     input: { arrayN: a.n, spacingLambda: a.spacingLambda, steerThetaDeg: a.steerThetaDeg, steerPhiDeg: a.steerPhiDeg, weighting: a.weighting, freqGHz: i.freqGHz, altitudeKm: i.altitudeKm, paOutW: perElementW },
     power: { mode: i.powerMode, elements, perElementW, rfW, eirpDbw },
     pattern: {
-      axis,
-      steerAxis: nominal,
-      peakField,
-      directivityDbi: m.directivityDbi,
+      axis: P.axis,
+      steerAxis: P.steerAxis,
+      peakField: P.peakField,
+      directivityDbi: P.directivityDbi,
       gainDbi,
-      hpbwDeg: m.hpbwDeg,
-      sidelobeDb: m.sidelobeDb,
-      gratingLobe: m.gratingLobe,
-      gratingLimit: gratingLimit(a.steerThetaDeg),
-      taperEfficiency: m.taperEfficiency,
-      cut: m.cut,
-      phaseStepX: -kd * Math.sin(t0) * Math.cos(p0),
-      phaseStepY: -kd * Math.sin(t0) * Math.sin(p0),
+      hpbwDeg: P.hpbwDeg,
+      sidelobeDb: P.sidelobeDb,
+      gratingLobe: P.gratingLobe,
+      gratingLimit: P.gratingLimit,
+      taperEfficiency: P.taperEfficiency,
+      cut: P.cut,
+      phaseStepX: P.phaseStepX,
+      phaseStepY: P.phaseStepY,
     },
-    contour,
-    lobes,
+    contour: P.contour,
+    lobes: P.lobes,
     flat,
     footprint,
     secondary,

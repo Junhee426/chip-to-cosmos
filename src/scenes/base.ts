@@ -190,13 +190,31 @@ export abstract class BaseLevel {
     }
   }
 
+  private emphasisId: string | null = null;
+
+  /**
+   * Link-budget X-ray: emphasise one component (the others recede) without moving the
+   * camera. Null restores the engineering-mode focus. Unknown ids are ignored.
+   */
+  emphasize(id: string | null): void {
+    this.emphasisId = id && this.components.some((c) => c.id === id) ? id : null;
+    this.applyDimTargets();
+    this.ctx.labels.highlight(this.emphasisId);
+  }
+
+  private applyDimTargets(): void {
+    const focus = this.modeFocus[this.mode];
+    for (const c of this.components) {
+      const d = this.modeDim.get(c.id)!;
+      const base = this.mode === 'structure' || !focus || focus.includes(c.id) ? 1 : 0.14;
+      d.target = this.emphasisId ? (c.id === this.emphasisId ? 1 : Math.min(base, 0.18)) : base;
+    }
+  }
+
   setMode(mode: EngMode): void {
     this.mode = mode;
     const focus = this.modeFocus[mode];
-    for (const c of this.components) {
-      const d = this.modeDim.get(c.id)!;
-      d.target = mode === 'structure' || !focus || focus.includes(c.id) ? 1 : 0.14;
-    }
+    this.applyDimTargets();
     for (const [m, list] of Object.entries(this.flows)) list?.forEach((f) => f.setActive(m === mode));
     this.ctx.labels.setDimmed(mode === 'structure' || !focus ? null : new Set(focus));
     this.onModeChanged(mode);

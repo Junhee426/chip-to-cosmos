@@ -57,9 +57,24 @@ export function createRenderer(antialias: boolean): THREE.WebGLRenderer {
 export async function prewarmLevel(renderer: THREE.WebGLRenderer, camera: THREE.Camera, scene: THREE.Scene, lvl: BaseLevel, st: AppState): Promise<void> {
   const compile = () => {
     lvl.root.visible = true;
+    // objects hidden until a mode or state shows them (beam, footprints, grating lobes)
+    // are compiled too, so they never stall the frame in which they first appear
+    const hidden: THREE.Object3D[] = [];
+    lvl.root.traverse((o) => {
+      if (!o.visible) {
+        hidden.push(o);
+        o.visible = true;
+      }
+    });
+    const restore = () => hidden.forEach((o) => (o.visible = false));
     // compileAsync only helps with KHR_parallel_shader_compile; otherwise compile synchronously now
-    const p = renderer.extensions.has('KHR_parallel_shader_compile') ? renderer.compileAsync(lvl.root, camera, scene) : Promise.resolve(renderer.compile(lvl.root, camera, scene));
-    lvl.root.visible = false;
+    let p: Promise<unknown>;
+    try {
+      p = renderer.extensions.has('KHR_parallel_shader_compile') ? renderer.compileAsync(lvl.root, camera, scene) : Promise.resolve(renderer.compile(lvl.root, camera, scene));
+    } finally {
+      restore();
+      lvl.root.visible = false;
+    }
     return p;
   };
   try {

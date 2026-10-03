@@ -1,6 +1,14 @@
 # Chip to Cosmos
 
-**From Electrons to Orbital Networks**
+**From element phase to communication coverage — from electrons to orbital networks.**
+
+<!-- Poster: capture with `node scripts/hero.mjs <url> <out> --only=visual` (hero-05-poster.png) or open
+     `?view=poster` and place the image here, e.g. ![Chip to Cosmos poster](docs/poster.png) -->
+
+**Start here:** open the app → *▶ Run 15-second demo*. A phased array on the satellite's
+Earth-facing deck changes its element phases; the beam steers; its −3 dB footprint moves on the
+spherical Earth; gain and link margin follow — every number calculated from one beam state.
+`?view=poster` opens the same signature frame directly (reproducible state and camera).
 
 An interactive, multiscale 3D scientific visualization that connects
 **electrons → semiconductors → transistors → ICs → RF/digital electronics →
@@ -51,6 +59,15 @@ COSMOS ▸ SATELLITE ▸ PAYLOAD ▸ PCB ▸ CHIP ▸ DIE ▸ MOSFET ▸ SILICON
   validity, limitations, references) plus live, substituted equations.
 - **Scientific integrity** — every model carries metadata and is labelled `CALCULATED`,
   `ILLUSTRATIVE` or *Simplified Educational Model*. See [MODEL_LIMITATIONS.md](MODEL_LIMITATIONS.md).
+- **Signature experience (V4)** — landing over the live satellite scene; a ~15 s *Quick Demo*
+  (Earth-facing satellite → element phase → beam → Earth footprint → poster) that ends
+  interactive (*Try it: steer the beam*); presentation mode (chrome hidden, 3–4 calculated
+  metrics); the full *Engineering Demo* and a *Why 0.5λ matters* grating-lobe demo; Array Compare
+  (8×8 vs 32×32 under an explicit power assumption) and a Link Budget X-ray whose stages
+  highlight the hardware and propagation path in 3D.
+- **Electronic steering, physically correct** — the user-service array is bolted to the nadir
+  deck (`frames.ts ARRAY_TO_BODY`); at θ₀ = 0 its boresight is the Earth-centre direction; steering
+  changes element phases, never the panel. Unit- and browser-tested.
 - **Cinematic, skippable intro**: Earth limb → satellite → cutaway → payload (exploded) → PCB →
   package (exploded) → die → MOSFET channel formation → *FROM ELECTRONS / TO ORBITAL NETWORKS*.
 
@@ -120,8 +137,12 @@ scripts/smoke.mjs      optional headless smoke test (screenshots every level)
 scripts/perf.mjs       performance + mobile harness (tiers, draw calls, 10 memory cycles, render-target
                        leaks, phone/tablet portrait+landscape layouts and the mobile journey)
 scripts/visual.mjs     12-view visual regression capture (before/after comparison)
-scripts/hero.mjs       hero demo: 9 captures, browser smoke checks (steer/size/grating/skip/replay/
-                       reduced motion), repeated-run frame stats + GPU resource counts, mobile journey
+scripts/hero.mjs       V4 hero harness: 10+ captures (Earth-facing array, Quick Demo stages, poster,
+                       grating, compare, X-ray, mobile poster), browser checks (panel never rotates,
+                       Quick/Engineering/Grating demos, Try it, skip-restores, reduced motion,
+                       ?view=poster reproducibility, X-ray emphasis), per-moment CPU cost and
+                       repeated Quick Demo runs (frame stats + GPU resource counts)
+npm run profile:beam   stage-by-stage cost of the beam model (opt-in Vitest profile)
 ```
 
 Rendering, scientific models, scenes and UI are strictly separated: models are pure

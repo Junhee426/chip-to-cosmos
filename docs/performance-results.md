@@ -224,3 +224,63 @@ Tap *▶ Demo* in the sheet → demo completes → BEAM LAB → *Experiment* →
 
 The first 390 × 844 capture showed the Earth-footprint framing too tight in portrait; the framing
 now backs off with the aspect ratio (re-run above is after the fix).
+
+# V4 measurements — signature experience (2026-10-02)
+
+Same container: headless Chromium, **SWIFTSHADER (CPU rendering, no GPU)**, 4 vCPU. Mobile rows are
+**EMULATED** (Chromium viewport + touch). No HARDWARE GPU or REAL DEVICE results exist yet — no FPS
+figure below may be read as phone/laptop performance.
+
+## Beam model cost, per call (Node, `npm run profile:beam`, mean of 20)
+
+| Case | solveBeam V3 → V4 (ms) | arrayMetrics V3 → V4 | BEAM LAB surface V3 → V4 |
+|---|---|---|---|
+| 8×8 θ25 | 10.8 → 3.5 | 6.0 → 2.3 | 5.5 → 2.2 |
+| 16×16 θ25 | 12.0 → 3.5 | 9.9 → 3.1 | 9.3 → 3.4 |
+| 32×32 θ25 | 24.3 → 5.0 | 21.0 → 4.3 | 20.0 → 4.0 |
+| 16×16 d1.0 (grating) | 13.0 → 4.3 | 12.0 → 3.5 | 10.2 → 3.2 |
+
+Cause: the separable AF sum now advances the phasor by complex multiplication instead of calling
+cos/sin per element (same sum, tested to 1e-12). With the pattern/footprint caches, altitude,
+frequency, power and receiver changes no longer re-integrate the pattern at all.
+
+## Per-moment main-thread cost in the browser (SWIFTSHADER, 1280 × 800, balanced)
+
+`solves` = system evaluations that missed the cache; times are CPU ms on this machine.
+Frame times are dominated by the CPU rasteriser and are given only for relative comparison.
+
+| Moment | frames | avg / p95 / max frame ms | solves | solve ms total (max) | BEAM LAB rebuild ms |
+|---|---|---|---|---|---|
+| satellite idle (3 s) | 2 | 458 / 833 / 833 | 0 | 0 | — |
+| phase steering tween (26 steps) | 51 | 831 / 917 / 1152 | 26 | 116 (13) | — |
+| satellite → BEAM LAB | 89 | 1590 / 2300 / 4050 | 0 | 0 | 48.7 |
+| radiation surface update (N 8/16/32/16) | 11 | 964 / 1417 / 1417 | 7 | 17 (13) | 29.7 |
+| grating appearance (d 0.50 → 1.00) | 129 | 708 / 1167 / 1683 | 71 | 274 (13) | 22.9 |
+| Earth footprint update (θ 0 → 40°) | 413 | 915 / 1917 / 2183 | 29 | 93 (13) | — |
+| poster idle (3 s) | 11 | 533 / 800 / 800 | 0 | 0 | — |
+
+Before the satellite-panel chart fix the steering tween cost 156 solves for 26 steps (the payload
+chart re-evaluated 5 ADC variants each step); after the fix: 26 (one per state).
+
+## Quick Demo × 5 (SWIFTSHADER, 1280 × 800)
+
+| Run | wall s | planned s | frames | avg ms | p95 | p99 | max | long | geo | tex | prog | heap MB |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 87.6 | 15.3 | 87 | 996 | 2067 | 4700 | 4700 | 84 | 113 | 23 | 69 | 26 |
+| 2 | 90.4 | 15.3 | 89 | 1009 | 2167 | 5016 | 5016 | 84 | 113 | 23 | 69 | 26 |
+| 3 | 89.3 | 15.3 | 89 | 996 | 2233 | 4766 | 4766 | 83 | 113 | 23 | 69 | 27 |
+| 4 | 87.2 | 15.3 | 88 | 976 | 2183 | 4900 | 4900 | 83 | 113 | 23 | 69 | 26 |
+| 5 | 86.5 | 15.3 | 88 | 975 | 2133 | 4833 | 4833 | 84 | 113 | 23 | 69 | 27 |
+
+- Geometries, textures and programs are identical after every run; heap 26–27 MB — no growth.
+- Designed duration 15.3 s (8.2 s of motion under reduced motion). Wall time ≫ designed time
+  because SwiftShader frames take ~1 s and the loop clamps dt to 0.1 s.
+
+## Browser checks (SWIFTSHADER): 17 + 3 EMULATED mobile, all passed
+
+P0: array normal = body −Y; steering 0 → 40° leaves the satellite sub-array, tiles and BEAM LAB panel
+quaternions unchanged while the beam axis and footprint move. Quick Demo ends on the poster; Try it
+updates footprint and strip; Explore freely; Esc restores mode/params/chrome; X-ray emphasis;
+`?view=poster` reproducible; Engineering Demo completes; reduced motion; landing; grating demo
+(lobe + secondary footprint); array compare. EMULATED 390×844, 430×932, 844×390: Quick Demo →
+poster with satellite and footprint unobstructed, no target < 44 px, Try-it by touch.
